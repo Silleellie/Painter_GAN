@@ -1,49 +1,114 @@
-from typing import Optional, Callable
+import os
+import shutil
+from keras.layers import Dense, Input, BatchNormalization, LeakyReLU, UpSampling2D, Conv2D, Activation, Cropping2D, \
+    ZeroPadding2D, Dropout, Flatten, Reshape
 
-from gan_abstract import GAN, Generator, Discriminator
-from tensorflow import keras as nn
+from gan_abstract import PainterGAN
+from tensorflow import keras
 import tensorflow as tf
 import numpy as np
 
 
-class WGAN(GAN):
+class PainterWGAN(PainterGAN):
     """
 
     https://keras.io/examples/generative/wgan_gp/
 
     """
-    def __init__(self, generator, discriminator, latent_dim, discriminator_extra_steps=3, gp_weight=10.0):
+    def __init__(self, discriminator_extra_steps=3, gp_weight=10.0):
 
-        super(WGAN, self).__init__(generator, discriminator, latent_dim)
+        super(PainterWGAN, self).__init__()
+
         self.d_steps = discriminator_extra_steps
         self.gp_weight = gp_weight
-        self.generator_optimizer: Optional[nn.optimizers] = None
-        self.discriminator_optimizer: Optional[nn.optimizers] = None
-        self.generator_loss_fn: Optional[Callable] = None
-        self.discriminator_loss_fn: Optional[Callable] = None
+        self.latent_dim = None
+        self.g_optimizer = None
+        self.d_optimizer = None
+        self.d_loss_fn = None
+        self.g_loss_fn = None
 
-    def fit_with_checks(self, dataset, epochs, **kwargs):
-        if kwargs.get("g_optimizer") is None:
-            raise Exception("Define an optimizer function for the generator")
+    def build_generator(self, latent_dim, optimizer, loss_fn):
 
-        if kwargs.get("d_optimizer") is None:
-            raise Exception("Define an optimizer function for the discriminator")
+        noise = Input(shape=(latent_dim,))
 
-        if kwargs.get("g_loss_fn") is None:
-            raise Exception("Define a loss function for the generator")
+        x = Dense(4 * 4 * 256, use_bias=False)(noise)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(0.2)(x)
+        x = Reshape((4, 4, 256))(x)
 
-        if kwargs.get("d_loss_fn") is None:
-            raise Exception("Define a loss function for the discriminator")
+        x = UpSampling2D((2, 2))(x)
+        x = Conv2D(128, (3, 3), strides=(1, 1), padding="same", use_bias=False)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(0.2)(x)
 
-        super(WGAN, self).compile()
-        # pop() instead of get() so that if in future kwargs must be passed to fit() method
-        # the dict is cleaned (it's not really a problem, but still)
-        self.generator_optimizer = kwargs.pop("g_optimizer", None)
-        self.discriminator_optimizer = kwargs.pop("d_optimizer", None)
-        self.generator_loss_fn = kwargs.pop("g_loss_fn", None)
-        self.discriminator_loss_fn = kwargs.pop("d_loss_fn", None)
+        x = UpSampling2D((2, 2))(x)
+        x = Conv2D(64, (3, 3), strides=(1, 1), padding="same", use_bias=False)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(0.2)(x)
 
-        self.fit(dataset, epochs=epochs)
+        x = UpSampling2D((2, 2))(x)
+        x = Conv2D(1, (3, 3), strides=(1, 1), padding="same", use_bias=False)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(0.2)(x)
+        x = Activation("tanh")(x)
+
+        x = Cropping2D((2, 2))(x)
+
+        self.g = keras.models.Model(noise, x, name='generator')
+
+        self.latent_dim = latent_dim
+        self.g_optimizer = optimizer
+        self.g_loss_fn = loss_fn
+
+    def build_discriminator(self, input_shape, optimizer, loss_fn):
+
+        img_input = Input(shape=input_shape)
+
+        # Zero pad the input to make the input images size to (32, 32, 1).
+        x = ZeroPadding2D((2, 2))(img_input)
+
+        x = Conv2D(64, (5, 5), strides=(2, 2), padding="same", use_bias=True)(x)
+        x = LeakyReLU(0.2)(x)
+
+        x = Conv2D(128, (5, 5), strides=(2, 2), padding="same", use_bias=True)(x)
+        x = LeakyReLU(0.2)(x)
+        x = Dropout(0.3)(x)
+
+        x = Conv2D(256, (5, 5), strides=(2, 2), padding="same", use_bias=True)(x)
+        x = LeakyReLU(0.2)(x)
+        x = Dropout(0.3)(x)
+
+        x = Conv2D(512, (5, 5), strides=(2, 2), padding="same", use_bias=True)(x)
+        x = LeakyReLU(0.2)(x)
+
+        x = Flatten()(x)
+        x = Dropout(0.2)(x)
+        x = Dense(1)(x)
+
+        self.d = keras.models.Model(img_input, x, name="discriminator")
+
+        self.d_optimizer = optimizer
+        self.d_loss_fn = loss_fn
+
+    def build_monitor(self, n_img=None):
+        class WGANMonitor(keras.callbacks.Callback):
+            def __init__(self, num_img, latent_dim):
+                self.num_img = num_img
+                self.latent_dim = latent_dim
+
+            def on_epoch_end(self, epoch, logs=None):
+                random_latent_vectors = tf.random.normal(shape=(self.num_img, self.latent_dim))
+                generated_images = self.model.g(random_latent_vectors)
+                generated_images.numpy()
+                for i in range(self.num_img):
+                    converted_image = (generated_images[i] * 127.5) + 127.5
+                    img = keras.preprocessing.image.array_to_img(converted_image)
+                    img.save("wgan_test/generated_img_%03d_%d.png" % (epoch, i))
+
+        if n_img is None:
+            n_img = 3
+
+        self.monitor = WGANMonitor(n_img, self.latent_dim)
 
     def gradient_penalty(self, batch_size, real_images, fake_images):
         """ Calculates the gradient penalty.
@@ -59,7 +124,7 @@ class WGAN(GAN):
         with tf.GradientTape() as gp_tape:
             gp_tape.watch(interpolated)
             # 1. Get the discriminator output for this interpolated image.
-            pred = self.discriminator.model(interpolated, training=True)
+            pred = self.d(interpolated, training=True)
 
         # 2. Calculate the gradients w.r.t to this interpolated image.
         grads = gp_tape.gradient(pred, [interpolated])[0]
@@ -68,18 +133,10 @@ class WGAN(GAN):
         gp = tf.reduce_mean((norm - 1.0) ** 2)
         return gp
 
-    def process_data(self, real_images, labels=None):
-        if isinstance(real_images, tuple):
-            real_images = real_images[0]
+    @tf.function
+    def train_step(self, real_images):
 
-        # Get the batch size
-        batch_size = tf.shape(real_images)[0]
-
-        return real_images, batch_size
-
-    def train_step(self, data: tf.Tensor):
-
-        real_images, batch_size = self.process_data(data)
+        batch_s = tf.shape(real_images)[0]
 
         # For each batch, we are going to perform the
         # following steps as laid out in the original paper:
@@ -97,28 +154,29 @@ class WGAN(GAN):
         for i in range(self.d_steps):
             # Get the latent vector
             random_latent_vectors = tf.random.normal(
-                shape=(batch_size, self.latent_dim)
+                shape=(batch_s, self.latent_dim)
             )
             with tf.GradientTape() as tape:
                 # Generate fake images from the latent vector
-                fake_images = self.generator.model(random_latent_vectors, training=True)
+                fake_images = self.g(random_latent_vectors, training=True)
                 # Get the logits for the fake images
-                fake_logits = self.discriminator.model(fake_images, training=True)
+                fake_logits = self.d(fake_images, training=True)
                 # Get the logits for the real images
-                real_logits = self.discriminator.model(real_images, training=True)
+                real_logits = self.d(real_images, training=True)
 
                 # Calculate the discriminator loss using the fake and real image logits
-                d_cost = self.discriminator_loss_fn(real_img=real_logits, fake_img=fake_logits)
+                d_cost = self.d_loss_fn(real_img=real_logits, fake_img=fake_logits)
                 # Calculate the gradient penalty
                 gp = self.gradient_penalty(batch_size, real_images, fake_images)
                 # Add the gradient penalty to the original discriminator loss
                 d_loss = d_cost + gp * self.gp_weight
 
             # Get the gradients w.r.t the discriminator loss
-            d_gradient = tape.gradient(d_loss, self.discriminator.model.trainable_variables)
+            d_gradient = tape.gradient(d_loss, self.d.trainable_variables)
             # Update the weights of the discriminator using the discriminator optimizer
-            self.discriminator_optimizer.apply_gradients(
-                zip(d_gradient, self.discriminator.model.trainable_variables)
+
+            self.d_optimizer.apply_gradients(
+                zip(d_gradient, self.d.trainable_variables)
             )
 
         # Train the generator
@@ -126,98 +184,50 @@ class WGAN(GAN):
         random_latent_vectors = tf.random.normal(shape=(batch_size, self.latent_dim))
         with tf.GradientTape() as tape:
             # Generate fake images using the generator
-            generated_images = self.generator.model(random_latent_vectors, training=True)
+            generated_images = self.g(random_latent_vectors, training=True)
             # Get the discriminator logits for fake images
-            gen_img_logits = self.discriminator.model(generated_images, training=True)
+            gen_img_logits = self.d(generated_images, training=True)
             # Calculate the generator loss
-            g_loss = self.generator_loss_fn(gen_img_logits)
+            g_loss = self.g_loss_fn(gen_img_logits)
 
         # Get the gradients w.r.t the generator loss
-        gen_gradient = tape.gradient(g_loss, self.generator.model.trainable_variables)
+        gen_gradient = tape.gradient(g_loss, self.g.trainable_variables)
         # Update the weights of the generator using the generator optimizer
-        self.generator_optimizer.apply_gradients(
-            zip(gen_gradient, self.generator.model.trainable_variables)
+        self.g_optimizer.apply_gradients(
+            zip(gen_gradient, self.g.trainable_variables)
         )
-        return {"d_loss": d_loss, "g_loss": g_loss}
+        return {'d_loss': d_loss, 'g_loss': g_loss}
 
 
 if __name__ == "__main__":
-    noise_dim = 128
+
+    shutil.rmtree("wgan_test", ignore_errors=True)
+    os.makedirs("wgan_test")
+
+    latent_dim = 100
     img_shape = (28, 28, 1)
-    batch_size = 512
+    batch_size = 128
+    epochs = 25
 
-    (x_train, y_train), (x_test, y_test) = nn.datasets.mnist.load_data()
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
-    # Scale the pixel values to [0, 1] range
-    x_train = x_train.astype(np.float32) / 255.0
     # Add a channel dimension to the images (from 28x28 to 28x28x1)
     # (Since they are gray scale images we add the channel)
+    x_train = x_train.astype(np.float32)
     x_train = np.reshape(x_train, (-1, 28, 28, 1))
 
+    # reshape to [-1, 1] range
     x_train = (x_train - 127.5) / 127.5
 
     dataset = tf.data.Dataset.from_tensor_slices(x_train)
-    dataset = dataset.shuffle(buffer_size=1024).batch(64)
-
-    gen = Generator([
-
-        nn.layers.InputLayer((noise_dim,)),
-
-        nn.layers.Dense(4 * 4 * 256, use_bias=False),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(0.2),
-        nn.layers.Reshape((4, 4, 256)),
-
-        nn.layers.UpSampling2D((2, 2)),
-        nn.layers.Conv2D(128, (3, 3), strides=(1, 1), padding="same", use_bias=False),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(0.2),
-
-        nn.layers.UpSampling2D((2, 2)),
-        nn.layers.Conv2D(64, (3, 3), strides=(1, 1), padding="same", use_bias=False),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(0.2),
-
-        nn.layers.UpSampling2D((2, 2)),
-        nn.layers.Conv2D(1, (3, 3), strides=(1, 1), padding="same", use_bias=False),
-        nn.layers.BatchNormalization(),
-        nn.layers.Activation("tanh"),
-
-        nn.layers.Cropping2D((2, 2))
-
-    ])
-
-    critic = Discriminator([
-
-        nn.layers.InputLayer(img_shape),
-        # Zero pad the input to make the input images size to (32, 32, 1).
-        nn.layers.ZeroPadding2D((2, 2)),
-
-        nn.layers.Conv2D(64, (5, 5), strides=(2, 2), padding="same", use_bias=True),
-        nn.layers.LeakyReLU(0.2),
-
-        nn.layers.Conv2D(128, (5, 5), strides=(2, 2), padding="same", use_bias=True),
-        nn.layers.LeakyReLU(0.2),
-        nn.layers.Dropout(0.3),
-
-        nn.layers.Conv2D(256, (5, 5), strides=(2, 2), padding="same", use_bias=True),
-        nn.layers.LeakyReLU(0.2),
-        nn.layers.Dropout(0.3),
-
-        nn.layers.Conv2D(512, (5, 5), strides=(2, 2), padding="same", use_bias=True),
-        nn.layers.LeakyReLU(0.2),
-
-        nn.layers.Flatten(),
-        nn.layers.Dropout(0.2),
-        nn.layers.Dense(1)
-    ])
+    dataset = dataset.shuffle(buffer_size=1024).batch(batch_size)
 
     # Instantiate the optimizer for both networks
     # (learning_rate=0.0002, beta_1=0.5 are recommended)
-    generator_optimizer = nn.optimizers.Adam(
+    generator_optimizer = keras.optimizers.Adam(
         learning_rate=0.0002, beta_1=0.5, beta_2=0.9
     )
-    discriminator_optimizer = nn.optimizers.Adam(
+    discriminator_optimizer = keras.optimizers.Adam(
         learning_rate=0.0002, beta_1=0.5, beta_2=0.9
     )
 
@@ -233,21 +243,12 @@ if __name__ == "__main__":
     def generator_loss(fake_img):
         return -tf.reduce_mean(fake_img)
 
-    # Set the number of epochs for trainining.
-    epochs = 2
-
     # Instantiate the WGAN model.
-    wgan = WGAN(
-        generator=gen,
-        discriminator=critic,
-        latent_dim=noise_dim,
-        discriminator_extra_steps=3
-    )
+    wgan = PainterWGAN()
+
+    wgan.build_generator(latent_dim, generator_optimizer, generator_loss)
+    wgan.build_discriminator(img_shape, discriminator_optimizer, discriminator_loss)
+    wgan.build_monitor(n_img=3)
 
     # Start training the model.
-    wgan.fit_with_checks(dataset, epochs=epochs,
-                         d_optimizer=discriminator_optimizer,
-                         g_optimizer=generator_optimizer,
-                         g_loss_fn=generator_loss,
-                         d_loss_fn=discriminator_loss,
-                         )
+    wgan.fit(x=dataset, batch_size=batch_size, epochs=epochs, callbacks=[wgan.monitor])

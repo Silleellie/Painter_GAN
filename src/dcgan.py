@@ -1,83 +1,114 @@
 import os
 import shutil
-from typing import Optional, Callable
 
-from src.gan_abstract import GAN, Generator, Discriminator
+from keras import Sequential
+
+from src.gan_abstract import PainterGAN
 from tensorflow import keras as nn
 import tensorflow as tf
 import numpy as np
 
 
-class DCGANMonitor(nn.callbacks.Callback):
-    def __init__(self, num_img=3, latent_dim=128):
-        self.num_img = num_img
+class PainterDCGAN(PainterGAN):
+
+    def __init__(self, loss_fn):
+        super().__init__()
+
+        self.loss_fn = loss_fn
+        self.latent_dim = None
+        self.g_optimizer = None
+        self.d_optimizer = None
+        self.d_loss_metric = None
+        self.g_loss_metric = None
+
+    def build_generator(self, latent_dim, optimizer, loss_fn):
+        # weight initializer for Generator following DCGAN paper
+        weight_init = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.02)
+
+        # kernel size==4 and strides==2 because 4 % 2 = 0 so we avoid checkerboard issues
+        self.g = Sequential([
+
+            nn.layers.Input(shape=(latent_dim,)),
+            nn.layers.Dense(2 * 2 * 512),
+            nn.layers.ReLU(),
+
+            # from 1d to 3d
+            nn.layers.Reshape((2, 2, 512)),
+
+            # strides 2 so upsample to 8x8 image as output
+            nn.layers.Conv2DTranspose(256, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
+            # nn.layers.BatchNormalization(),
+            nn.layers.ReLU(),
+
+            # strides 2 so upsample to 16x16 image as output
+            nn.layers.Conv2DTranspose(128, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
+            nn.layers.BatchNormalization(),
+            nn.layers.ReLU(),
+
+            # strides 2 so upsample to 32x32 image as output
+            nn.layers.Conv2DTranspose(128, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
+            nn.layers.BatchNormalization(),
+            nn.layers.ReLU(),
+
+            # strides 2 so upsample to 32x32 image as output
+            nn.layers.Conv2DTranspose(128, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
+            # nn.layers.BatchNormalization(),
+            nn.layers.ReLU(),
+
+            # 3 as first input since 3 color channels
+            nn.layers.Conv2D(3, kernel_size=5, padding="same", activation="tanh"),
+        ], name='generator')
+
         self.latent_dim = latent_dim
+        self.g_loss_metric = loss_fn
+        self.g_optimizer = optimizer
 
-    def on_epoch_end(self, epoch, logs=None):
-        random_latent_vectors = tf.random.normal(shape=(self.num_img, self.latent_dim))
-        generated_images = self.model.generator.model(random_latent_vectors)
-        generated_images.numpy()
-        for i in range(self.num_img):
-            converted_image = (generated_images[i] * 127.5) + 127.5
-            img = nn.preprocessing.image.array_to_img(converted_image)
-            img.save("dcgan_test/generated_img_%03d_%d.png" % (epoch, i))
+    def build_discriminator(self, input_shape, optimizer, loss_fn):
+        self.d = Sequential([
+            nn.layers.Input(shape=(32, 32, 3)),
 
+            nn.layers.Conv2D(32, kernel_size=4, strides=2, padding="same"),
+            nn.layers.BatchNormalization(),
+            nn.layers.LeakyReLU(alpha=0.2),
 
-class DCGAN(GAN):
+            nn.layers.Conv2D(64, kernel_size=4, strides=2, padding="same"),
+            nn.layers.BatchNormalization(),
+            nn.layers.LeakyReLU(alpha=0.2),
 
-    def __init__(self, generator: Generator, discriminator: Discriminator, latent_dim):
-        super().__init__(generator, discriminator, latent_dim)
-        self.loss_fn: Optional[Callable] = None
+            nn.layers.Conv2D(128, kernel_size=4, strides=2, padding="same"),
+            nn.layers.BatchNormalization(),
+            nn.layers.LeakyReLU(alpha=0.2),
 
-    # not used at the moment
-    def process_data(self, real_images, labels=None):
-        batch_size = tf.shape(real_images)[0]
+            nn.layers.Flatten(),
+            nn.layers.Dropout(0.3),
+            nn.layers.Dense(1, activation="sigmoid"),
+        ], name='discriminator')
 
-        # this are the random vectors, starting point for generation of images
-        random_noise_vectors = tf.random.normal(shape=(batch_size, self.latent_dim))
+        self.d_optimizer = optimizer
+        self.d_loss_metric = loss_fn
 
-        generated_images = self.generator.model(random_noise_vectors)
+    def build_monitor(self, n_img=None):
+        class DCGANMonitor(nn.callbacks.Callback):
+            def __init__(self, num_img, latent_dim):
+                self.num_img = num_img
+                self.latent_dim = latent_dim
 
-        # contains both fake and real images
-        combined_images = tf.concat([generated_images, real_images], axis=0)
+            def on_epoch_end(self, epoch, logs=None):
+                random_latent_vectors = tf.random.normal(shape=(self.num_img, self.latent_dim))
+                generated_images = self.model.g(random_latent_vectors)
+                generated_images.numpy()
+                for i in range(self.num_img):
+                    converted_image = (generated_images[i] * 127.5) + 127.5
+                    img = nn.preprocessing.image.array_to_img(converted_image)
+                    img.save("dcgan_test/generated_img_%03d_%d.png" % (epoch, i))
 
-        # labels to distinguish real from fake images in combined_images (0=real, 1=fake)
-        labels = tf.concat(
-            [tf.ones((batch_size, 1)), tf.zeros((batch_size, 1))], axis=0
-        )
-        # add random noise to the labels
-        labels += 0.05 * tf.random.uniform(tf.shape(labels))
+        if n_img is None:
+            n_img = 3
 
-        return batch_size, combined_images, labels
+        self.monitor = DCGANMonitor(n_img, self.latent_dim)
 
-    def fit_with_checks(self, dataset, epochs, **kwargs):
-        if kwargs.get("loss_fn") is None:
-            raise Exception("Define a loss function")
-
-        if kwargs.get("g_optimizer") is None:
-            raise Exception("Define an optimizer function for the generator")
-
-        if kwargs.get("d_optimizer") is None:
-            raise Exception("Define an optimizer function for the discriminator")
-
-        if kwargs.get("g_loss_metric") is None:
-            raise Exception("Define a loss metric for the generator")
-
-        if kwargs.get("d_loss_metric") is None:
-            raise Exception("Define a loss metric for the discriminator")
-
-        super(DCGAN, self).compile()
-        # pop() instead of get() so that if in future kwargs must be passed to fit() method
-        # the dict is cleaned (it's not really a problem, but still)
-        self.loss_fn = kwargs.pop("loss_fn", None)
-        self.generator.optimizer = kwargs.pop("g_optimizer", None)
-        self.discriminator.optimizer = kwargs.pop("d_optimizer", None)
-        self.generator.loss_metric = kwargs.pop("g_loss_metric", None)
-        self.discriminator.loss_metric = kwargs.pop("d_loss_metric", None)
-
-        self.fit(dataset, epochs=epochs, callbacks=[DCGANMonitor(num_img=3, latent_dim=self.latent_dim)])
-
-    def train_step(self, real_images: tf.Tensor):
+    @tf.function
+    def train_step(self, real_images):
 
         batch_size = tf.shape(real_images)[0]
         # this are the random vectors, starting point for generation of images
@@ -85,52 +116,51 @@ class DCGAN(GAN):
 
         with tf.GradientTape() as tape:
             # Compute discriminator loss on real images
-            pred_real = self.discriminator.model(real_images, training=True)
+            pred_real = self.d(real_images, training=True)
 
-            # these are real images so label is 1, but we add random noise also to add more "salt" to the
-            # training phase
+            # these are real images so label is 1, but we also perform smooth label
+            # it's a simple trick which should improve the process
             real_labels = tf.ones((batch_size, 1))
+            # Add random noise to the labels - important trick!
             real_labels += 0.05 * tf.random.uniform(tf.shape(real_labels))
-
             d_loss_real = self.loss_fn(real_labels, pred_real)
 
             # Compute discriminator loss on fake images
-            fake_images = self.generator.model(random_noise_vectors)
-            pred_fake = self.discriminator.model(fake_images, training=True)
+            fake_images = self.g(random_noise_vectors)
+            pred_fake = self.d(fake_images, training=True)
 
-            # these are fake images (generated by the generator) so label is 0, but we add random noise also to add more
-            # "salt" to the training phase
+            # these are fake images (generated by the generator) so label is 0, but we also perform smooth label
+            # it's a simple trick which should improve the process
             fake_labels = tf.zeros((batch_size, 1))
+            # Add random noise to the labels - important trick!
             fake_labels += 0.05 * tf.random.uniform(tf.shape(fake_labels))
-
             d_loss_fake = self.loss_fn(fake_labels, pred_fake)
 
             # total discriminator loss
             d_loss = (d_loss_real + d_loss_fake) / 2
 
         # Compute discriminator gradients
-        grads = tape.gradient(d_loss, self.discriminator.model.trainable_variables)
+        grads = tape.gradient(d_loss, self.d.trainable_variables)
         # Update discriminator weights
-        self.discriminator.optimizer.apply_gradients(zip(grads, self.discriminator.model.trainable_variables))
+        self.d_optimizer.apply_gradients(zip(grads, self.d.trainable_variables))
 
-        # We try to fool the discriminator by telling to it that generated images by the generator are real (class 1),
-        # but we also add random noise to the labels
+        # We try to fool the discriminator by telling to it that generated images by the generator are real (class 1)
         misleading_labels = tf.ones((batch_size, 1))
         with tf.GradientTape() as tape:
-            fake_images = self.generator.model(random_noise_vectors, training=True)
-            pred_fake = self.discriminator.model(fake_images, training=True)
+            fake_images = self.g(random_noise_vectors, training=True)
+            pred_fake = self.d(fake_images, training=True)
             g_loss = self.loss_fn(misleading_labels, pred_fake)
 
         # Compute generator gradients
-        grads = tape.gradient(g_loss, self.generator.model.trainable_variables)
+        grads = tape.gradient(g_loss, self.g.trainable_variables)
         # Update generator weights
-        self.generator.optimizer.apply_gradients(zip(grads, self.generator.model.trainable_variables))
-        self.discriminator.loss_metric.update_state(d_loss)
-        self.generator.loss_metric.update_state(g_loss)
+        self.g_optimizer.apply_gradients(zip(grads, self.g.trainable_variables))
+        self.d_loss_metric.update_state(d_loss)
+        self.g_loss_metric.update_state(g_loss)
 
         return {
-            "d_loss": self.discriminator.loss_metric.result(),
-            "g_loss": self.generator.loss_metric.result(),
+            "d_loss": self.d_loss_metric.result(),
+            "g_loss": self.g_loss_metric.result(),
         }
 
 
@@ -147,6 +177,11 @@ if __name__ == "__main__":
     shutil.rmtree("dcgan_test", ignore_errors=True)
     os.makedirs("dcgan_test")
 
+    latent_dim = 100
+    img_shape = (32, 32, 3)
+    batch_size = 8
+    epochs = 50
+
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
     x_train = x_train.reshape((x_train.shape[0], 32, 32, 3)).astype(np.float32)
@@ -161,75 +196,18 @@ if __name__ == "__main__":
 
     # each image will be scaled in range [-1, 1] since tanh activation will be used
     dataset = dataset.map(lambda x: x - 127.5 / 127.5)
-    dataset = dataset.shuffle(buffer_size=1024).batch(64)
+    dataset = dataset.shuffle(buffer_size=1024).batch(batch_size)
 
-    image_size = 32
-    latent_dim = 100
-    # weight initializer for Generator following DCGAN paper
-    weight_init = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.02)
+    dcgan = PainterDCGAN(loss_fn=nn.losses.BinaryCrossentropy(label_smoothing=0.1))
 
-    # kernel size==4 and strides==2 because 4 % 2 = 0 so we avoid checkerboard issues
-    gen = Generator([
+    dcgan.build_generator(latent_dim,
+                          optimizer=nn.optimizers.Adam(learning_rate=0.0004, beta_1=0.5),
+                          loss_fn=nn.metrics.Mean(name="generator_loss"))
 
-        tf.keras.Input(shape=(latent_dim,)),
-        nn.layers.Dense(4 * 4 * 256),
-        nn.layers.BatchNormalization(),
-        nn.layers.ReLU(),
+    dcgan.build_discriminator(img_shape,
+                              optimizer=nn.optimizers.Adam(learning_rate=0.0003, beta_1=0.5),
+                              loss_fn=nn.metrics.Mean(name="discriminator_loss"))
 
-        # from 1d to 3d
-        nn.layers.Reshape((4, 4, 256)),
+    dcgan.build_monitor(n_img=1)
 
-        # strides 2 so upsample to 8x8 image as output
-        nn.layers.Conv2DTranspose(256, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
-        nn.layers.BatchNormalization(),
-        nn.layers.ReLU(),
-
-        # strides 2 so upsample to 16x16 image as output
-        nn.layers.Conv2DTranspose(256, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
-        nn.layers.BatchNormalization(),
-        nn.layers.ReLU(),
-
-        # strides 2 so upsample to 32x32 image as output
-        nn.layers.Conv2DTranspose(256, kernel_size=4, strides=2, padding="same", kernel_initializer=weight_init),
-        nn.layers.BatchNormalization(),
-        nn.layers.ReLU(),
-
-        # strides 1 so no upsample, additional layer to make generator stronger
-        nn.layers.Conv2DTranspose(256, kernel_size=4, strides=1, padding="same", kernel_initializer=weight_init),
-        nn.layers.BatchNormalization(),
-        nn.layers.ReLU(),
-
-        # 3 as first input since 3 color channels
-        nn.layers.Conv2D(3, kernel_size=3, padding="same", activation="tanh"),
-    ])
-
-    disc = Discriminator([
-        tf.keras.Input(shape=(32, 32, 3)),
-
-        nn.layers.Conv2D(32, kernel_size=3, strides=2, padding="same"),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(alpha=0.2),
-
-        nn.layers.Conv2D(64, kernel_size=3, strides=2, padding="same"),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(alpha=0.2),
-
-        nn.layers.Conv2D(128, kernel_size=3, strides=2, padding="same"),
-        nn.layers.BatchNormalization(),
-        nn.layers.LeakyReLU(alpha=0.2),
-
-        nn.layers.Flatten(),
-        nn.layers.Dropout(0.3),
-        nn.layers.Dense(1, activation="sigmoid"),
-    ])
-
-    gan = DCGAN(generator=gen, discriminator=disc, latent_dim=latent_dim)
-
-    # discriminator learning rate higher so that it can tell faster the generator how to produce better images
-    # but still it should not "overpower" it
-    gan.fit_with_checks(train_images, epochs=50,
-                        loss_fn=nn.losses.BinaryCrossentropy(),
-                        g_optimizer=nn.optimizers.Adam(learning_rate=0.0001, beta_1=0.5),
-                        d_optimizer=nn.optimizers.Adam(learning_rate=0.0003, beta_1=0.5),
-                        g_loss_metric=nn.metrics.Mean(name="generator_loss"),
-                        d_loss_metric=nn.metrics.Mean(name="discriminator_loss"))
+    dcgan.fit(x=dataset, batch_size=batch_size, epochs=epochs, callbacks=[dcgan.monitor])

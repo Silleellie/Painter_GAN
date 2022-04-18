@@ -1,7 +1,9 @@
 from abc import abstractmethod
+
+import keras
 from tensorflow import keras as nn
 import tensorflow as tf
-from typing import List
+from typing import List, Optional
 
 
 class Network:
@@ -59,4 +61,31 @@ class GAN(nn.Model):
 
     @abstractmethod
     def train_step(self, data: tf.Tensor):
+        raise NotImplementedError
+
+
+class PainterGAN(keras.Model):
+
+    def __init__(self):
+        super().__init__()
+
+        super().compile()
+
+        # evaluated upon call of build_generator()
+        self.g: Optional[nn.Sequential] = None
+
+        # evaluated upon call of build_discriminator()
+        self.d: Optional[nn.Sequential] = None
+
+        # evaluated upon call of build_monitor()
+        self.monitor: Optional[nn.callbacks.Callback] = None
+
+    @abstractmethod
+    def build_generator(self, latent_dim, optimizer, loss_fn):
+        raise NotImplementedError
+
+    def build_discriminator(self, input_shape, optimizer, loss_fn):
+        raise NotImplementedError
+
+    def build_monitor(self, n_img: int = None):
         raise NotImplementedError
