@@ -61,7 +61,7 @@ class Generator(nn.Module):
                 padding=1)
         self.bn2d2 = nn.BatchNorm2d(64)
 
-        self.conv4 = nn.ConvTranspose2d(
+        self.conv3 = nn.ConvTranspose2d(
                 in_channels=64,
                 out_channels=3,
                 kernel_size=4,
@@ -86,7 +86,7 @@ class Generator(nn.Module):
         intermediate = self.bn2d2(intermediate)
         intermediate = self.relu(intermediate)
 
-        intermediate = self.conv4(intermediate)
+        intermediate = self.conv3(intermediate)
         output_tensor = self.tanh(intermediate)
         return output_tensor
 
@@ -145,7 +145,7 @@ class Discriminator(nn.Module):
 
 class DCGAN:
     def __init__(self, latent_dim, noise_fn, dataloader,
-                 batch_size=32, lr_d=0.002, lr_g=0.002, device: torch.device ='cpu'):
+                 batch_size=32, lr_d=0.0002, lr_g=0.0002, device: torch.device ='cpu'):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -217,7 +217,8 @@ class DCGAN:
         pred_fake = self.discriminator(fake_samples)
         loss_fake = self.criterion(pred_fake, self.fake_labels)
 
-        # combine
+        # combine two losses
+        # Simple sum and no division by two seems to work better, check original dcgan paper though
         loss = (loss_real + loss_fake)
         loss.backward()
         self.optim_d.step()
@@ -263,6 +264,9 @@ if __name__ == '__main__':
     
     https://towardsdatascience.com/how-to-build-a-dcgan-with-pytorch-31bfbf2ad96a
     
+    result with 100 epoch:
+    Epoch 100; Elapsed time = 1100s
+    G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
 
     shutil.rmtree("dcgan_test_pytorch", ignore_errors=True)
@@ -270,7 +274,7 @@ if __name__ == '__main__':
 
     image_size = 32
     batch_size = 64
-    epochs = 100
+    epochs = 200
     latent_dim = 100
 
     # Number of GPUs available. Use 0 for CPU mode.
