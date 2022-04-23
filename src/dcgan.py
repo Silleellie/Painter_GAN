@@ -179,7 +179,7 @@ if __name__ == "__main__":
 
     latent_dim = 100
     img_shape = (32, 32, 3)
-    batch_size = 8
+    batch_size = 64
     epochs = 50
 
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
