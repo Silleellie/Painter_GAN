@@ -164,9 +164,10 @@ class BEGAN:
                                   lr=lr_d, betas=(0.5, 0.999))
         self.optim_g = optim.Adam(self.generator.parameters(),
                                   lr=lr_g, betas=(0.5, 0.999))
-        self.gamma = 0.5
-        self.lambda_k = 0.001
-        self.Kt = 0.0
+
+        self.gamma = 0.7  # controls diversity of generated images
+        self.lambda_k = 0.001  # used in paper
+        self.Kt = 0.0  # starts at 0
 
     def generate_samples(self, latent_vec=None, num=None):
         """Sample images from the generator.
@@ -212,7 +213,6 @@ class BEGAN:
         loss_fake = self.criterion(pred_fake, fake_samples)  # l1_loss
 
         # combine two losses
-        # Simple sum and no division by two seems to work better, check original dcgan paper though
         loss = loss_real - self.Kt * loss_fake
 
         self.optim_d.zero_grad()
@@ -278,9 +278,9 @@ if __name__ == '__main__':
 
     image_size = 32
     batch_size = 32
-    epochs = 200
-    latent_dim = 128
-    num_filters = 32
+    epochs = 500
+    latent_dim = 64
+    num_filters = 16
 
     # Number of GPUs available. Use 0 for CPU mode.
     ngpu = 1
