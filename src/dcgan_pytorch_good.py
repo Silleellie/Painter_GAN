@@ -311,11 +311,11 @@ class DCGAN:
             # We build labels here so that if the last batch has less samples
             # we don't have to drop it but we can still use it
             # we perform smooth labels
-            self.real_labels = torch.ones((current_batch_size, 1), device=device)
-            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=device)
+            self.real_labels = torch.ones((current_batch_size, 1), device=self.device)
+            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=self.device)
 
-            self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
-            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=device)
+            self.fake_labels = torch.zeros((current_batch_size, 1), device=self.device)
+            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
 
             loss_g_running += self.train_step_generator(current_batch_size)
 
