@@ -1,17 +1,20 @@
 import os
+import re
 import shutil
 
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
 from time import time
 import torch.utils.data
-import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import ConcatDataset
+
+from src.utils import PaintingsFolder
 
 
 def weights_init(m):
@@ -39,34 +42,61 @@ class Generator(nn.Module):
     def _init_modules(self):
         """Initialize the modules."""
         # Project the input
-        self.linear1 = nn.Linear(self.latent_dim, 256*4*4)
-        self.bn1d1 = nn.BatchNorm1d(256*4*4)
+        self.linear1 = nn.Linear(self.latent_dim, 1024 * 2 * 2)
+        self.bn1d1 = nn.BatchNorm1d(1024 * 2 * 2)
         self.relu = nn.ReLU()
 
         # Convolutions
         self.conv1 = nn.ConvTranspose2d(
-                in_channels=256,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-        self.bn2d1 = nn.BatchNorm2d(128)
+            in_channels=1024,
+            out_channels=512,
+            kernel_size=4,
+            stride=2,
+            padding=1)
+        self.bn2d1 = nn.BatchNorm2d(512)
 
         # Convolutions
         self.conv2 = nn.ConvTranspose2d(
-                in_channels=128,
-                out_channels=64,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-        self.bn2d2 = nn.BatchNorm2d(64)
+            in_channels=512,
+            out_channels=256,
+            kernel_size=4,
+            stride=2,
+            padding=1)
+        self.bn2d2 = nn.BatchNorm2d(256)
 
+        # Convolutions
         self.conv3 = nn.ConvTranspose2d(
-                in_channels=64,
-                out_channels=3,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+            in_channels=256,
+            out_channels=128,
+            kernel_size=4,
+            stride=2,
+            padding=1)
+        self.bn2d3 = nn.BatchNorm2d(128)
+
+        # Convolutions
+        self.conv4 = nn.ConvTranspose2d(
+            in_channels=128,
+            out_channels=64,
+            kernel_size=4,
+            stride=2,
+            padding=1)
+        self.bn2d4 = nn.BatchNorm2d(64)
+
+        # Convolutions
+        self.conv5 = nn.ConvTranspose2d(
+            in_channels=64,
+            out_channels=32,
+            kernel_size=4,
+            stride=2,
+            padding=1)
+        self.bn2d5 = nn.BatchNorm2d(32)
+
+        self.conv6 = nn.ConvTranspose2d(
+            in_channels=32,
+            out_channels=3,
+            kernel_size=4,
+            stride=2,
+            padding=1)
         self.tanh = nn.Tanh()
 
     def forward(self, input_tensor):
@@ -76,7 +106,7 @@ class Generator(nn.Module):
         intermediate = self.relu(intermediate)
 
         # reshape
-        intermediate = intermediate.view((-1, 256, 4, 4))
+        intermediate = intermediate.view((-1, 1024, 2, 2))
 
         intermediate = self.conv1(intermediate)
         intermediate = self.bn2d1(intermediate)
@@ -87,6 +117,18 @@ class Generator(nn.Module):
         intermediate = self.relu(intermediate)
 
         intermediate = self.conv3(intermediate)
+        intermediate = self.bn2d3(intermediate)
+        intermediate = self.relu(intermediate)
+
+        intermediate = self.conv4(intermediate)
+        intermediate = self.bn2d4(intermediate)
+        intermediate = self.relu(intermediate)
+
+        intermediate = self.conv5(intermediate)
+        intermediate = self.bn2d5(intermediate)
+        intermediate = self.relu(intermediate)
+
+        intermediate = self.conv6(intermediate)
         output_tensor = self.tanh(intermediate)
         return output_tensor
 
@@ -102,41 +144,69 @@ class Discriminator(nn.Module):
 
     def _init_modules(self):
         """Initialize the modules."""
+        self.leaky_relu = nn.LeakyReLU(0.2)
+        self.dropout_2d = nn.Dropout2d(0.25)
+
         self.conv1 = nn.Conv2d(
-                in_channels=3,
-                out_channels=64,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=True)
-        self.bn2d1 = nn.BatchNorm2d(64)
-        self.leaky_relu = nn.LeakyReLU()
+            in_channels=3,
+            out_channels=32,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            bias=True)
 
         self.conv2 = nn.Conv2d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=True)
-        self.bn2d2 = nn.BatchNorm2d(128)
+            in_channels=32,
+            out_channels=64,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            bias=True)
+        self.bn2d2 = nn.BatchNorm2d(64)
+
+        self.conv3 = nn.Conv2d(
+            in_channels=64,
+            out_channels=128,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            bias=True)
+        self.bn2d3 = nn.BatchNorm2d(128)
+
+        self.conv4 = nn.Conv2d(
+            in_channels=128,
+            out_channels=256,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            bias=True)
 
         self.flatten = nn.Flatten()
-        self.dropout_2d = nn.Dropout2d(0.3)
-        self.linear1 = nn.Linear(128*8*8, 1, bias=True)
+        self.linear1 = nn.Linear(256 * 8 * 8, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_tensor):
         """Forward pass; map samples to confidence they are real [0, 1]."""
         intermediate = self.conv1(input_tensor)
-        intermediate = self.bn2d1(intermediate)
         intermediate = self.leaky_relu(intermediate)
+        intermediate = self.dropout_2d(intermediate)
 
         intermediate = self.conv2(intermediate)
-        intermediate = self.bn2d2(intermediate)
         intermediate = self.leaky_relu(intermediate)
+        intermediate = self.dropout_2d(intermediate)
+        intermediate = self.bn2d2(intermediate)
 
-        intermediate = intermediate.view((-1, 128*8*8))
+        intermediate = self.conv3(intermediate)
+        intermediate = self.leaky_relu(intermediate)
+        intermediate = self.dropout_2d(intermediate)
+        intermediate = self.bn2d3(intermediate)
+
+        intermediate = self.conv4(intermediate)
+        intermediate = self.leaky_relu(intermediate)
+        intermediate = self.dropout_2d(intermediate)
+
+        # reshape
+        intermediate = intermediate.view((-1, 256 * 8 * 8))
         intermediate = self.linear1(intermediate)
         output_tensor = self.sigmoid(intermediate)
 
@@ -145,7 +215,7 @@ class Discriminator(nn.Module):
 
 class DCGAN:
     def __init__(self, latent_dim, noise_fn, dataloader,
-                 batch_size=32, lr_d=0.0002, lr_g=0.0002, device: torch.device ='cpu'):
+                 batch_size=32, lr_d=0.0002, lr_g=0.0002, device: torch.device = 'cpu'):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -161,6 +231,8 @@ class DCGAN:
         self.generator.apply(weights_init)
 
         self.discriminator = Discriminator().to(device)
+        self.discriminator.apply(weights_init)
+
         self.noise_fn = noise_fn
         self.dataloader = dataloader
         self.batch_size = batch_size
@@ -193,7 +265,7 @@ class DCGAN:
 
     def train_step_generator(self, current_batch_size):
         """Train the generator one step and return the loss."""
-        self.generator.zero_grad()
+        self.optim_g.zero_grad()
 
         latent_vec = self.noise_fn(current_batch_size)
         generated = self.generator(latent_vec)
@@ -205,7 +277,7 @@ class DCGAN:
 
     def train_step_discriminator(self, real_samples, current_batch_size):
         """Train the discriminator one step and return the losses."""
-        self.discriminator.zero_grad()
+        self.optim_d.zero_grad()
 
         pred_real = self.discriminator(real_samples)
         loss_real = self.criterion(pred_real, self.real_labels)
@@ -218,8 +290,7 @@ class DCGAN:
         loss_fake = self.criterion(pred_fake, self.fake_labels)
 
         # combine two losses
-        # Simple sum and no division by two seems to work better, check original dcgan paper though
-        loss = (loss_real + loss_fake)
+        loss = (loss_real + loss_fake) / 2
         loss.backward()
         self.optim_d.step()
         return loss_real.item(), loss_fake.item()
@@ -235,6 +306,8 @@ class DCGAN:
         for batch, (real_samples, _) in enumerate(self.dataloader):
 
             current_batch_size = real_samples.size(0)
+            real_samples = real_samples.to(self.device)
+
             # We build labels here so that if the last batch has less samples
             # we don't have to drop it but we can still use it
             # we perform smooth labels
@@ -244,11 +317,17 @@ class DCGAN:
             self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
             self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=device)
 
-            real_samples = real_samples.to(self.device)
+            loss_g_running += self.train_step_generator(current_batch_size)
+
+            half_batch_size = int(current_batch_size / 2)
+
+            random_idx = np.random.randint(0, current_batch_size, half_batch_size)
+            random_half_batch = real_samples[random_idx]
+
             ldr_, ldf_ = self.train_step_discriminator(real_samples, current_batch_size)
             loss_d_real_running += ldr_
             loss_d_fake_running += ldf_
-            loss_g_running += self.train_step_generator(current_batch_size)
+
 
         n_batches = len(self.dataloader)
         loss_g_running /= n_batches
@@ -269,13 +348,31 @@ if __name__ == '__main__':
     G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
 
-    shutil.rmtree("dcgan_test_pytorch", ignore_errors=True)
-    os.makedirs("dcgan_test_pytorch")
-
-    image_size = 32
+    output_dir = '../output/dcgan_test_pytorch'
+    image_size = 128
     batch_size = 64
     epochs = 200
     latent_dim = 100
+
+    shutil.rmtree(output_dir, ignore_errors=True)
+    os.makedirs(output_dir)
+
+    metadata_csv = pd.read_csv('../dataset/best_artworks/artists_good.csv')
+
+    death_monet = 1926
+    impressionist_artists_dict = dict()
+    other_artists_to_consider_dict = dict()
+    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
+                                                                       metadata_csv['name'],
+                                                                       metadata_csv['years'],
+                                                                       metadata_csv['genre']):
+
+        dob = artist_years.split(' ')[0]
+        if re.search(r'impressionism', artistic_movement.lower()):
+
+            impressionist_artists_dict[artist_name] = artist_id
+        elif int(dob) < death_monet:
+            other_artists_to_consider_dict[artist_name] = artist_id
 
     # Number of GPUs available. Use 0 for CPU mode.
     ngpu = 1
@@ -283,39 +380,35 @@ if __name__ == '__main__':
     # Decide which device we want to run on
     device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 
-    train = dset.CIFAR10(root='../dataset/cifar10',
-                         transform=transforms.Compose([
-                             transforms.Resize(image_size),
-                             transforms.CenterCrop(image_size),
-                             transforms.ToTensor(),
+    train_impressionist = PaintingsFolder(
+        root='../dataset/best_artworks/images',
+        transform=transforms.Compose([
+            transforms.Resize(image_size),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
 
-                             # normalizes images in range [-1,1]
-                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 
-                         ]),
-                         train=True,
-                         download=True
-                         )
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
 
-    train_airplane_indexes = [i for i, target in enumerate(train.targets) if target == 0]
-    train_airplane = torch.utils.data.Subset(train, train_airplane_indexes)
+    train_others = PaintingsFolder(
+        root='../dataset/best_artworks/images',
+        transform=transforms.Compose([
+            transforms.Resize(image_size),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
 
-    test = dset.CIFAR10(root='../dataset/cifar10',
-                        transform=transforms.Compose([
-                            transforms.Resize(image_size),
-                            transforms.CenterCrop(image_size),
-                            transforms.ToTensor(),
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 
-                            # normalizes images in range [-1,1]
-                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                        ]),
-                        train=False,
-                        download=True
-                        )
-    test_airplane_indexes = [i for i, target in enumerate(test.targets) if target == 0]
-    test_airplane = torch.utils.data.Subset(test, test_airplane_indexes)
+        ]),
+        artists_dict=other_artists_to_consider_dict
+    )
 
-    dataset = ConcatDataset([train_airplane, test_airplane])
+    dataset = ConcatDataset([train_impressionist, train_others])
 
     # Create the dataloader
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
@@ -327,7 +420,7 @@ if __name__ == '__main__':
 
     start = time()
     for i in range(epochs):
-        print(f"Epoch {i+1}; Elapsed time = {int(time() - start)}s")
+        print(f"Epoch {i + 1}; Elapsed time = {int(time() - start)}s")
 
         g_loss, (d_loss_real, d_loss_fake) = gan.train_epoch()
 
@@ -337,7 +430,6 @@ if __name__ == '__main__':
         images = gan.generate_samples(num=64)
         ims = vutils.make_grid(images, normalize=True)
         plt.axis("off")
-        plt.title(f"Epoch {i+1}")
+        plt.title(f"Epoch {i + 1}")
         plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'dcgan_test_pytorch/epoch{i+1}.png')
-
+        plt.savefig(f'{output_dir}/epoch{i + 1}.png')
