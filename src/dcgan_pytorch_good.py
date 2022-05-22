@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import shutil
 
@@ -42,56 +43,47 @@ class Generator(nn.Module):
     def _init_modules(self):
         """Initialize the modules."""
         # Project the input
-        self.linear1 = nn.Linear(self.latent_dim, 1024 * 2 * 2)
-        self.bn1d1 = nn.BatchNorm1d(1024 * 2 * 2)
+        self.linear1 = nn.Linear(self.latent_dim, 512 * 2 * 2)
+        self.bn1d1 = nn.BatchNorm1d(512 * 2 * 2)
         self.relu = nn.ReLU()
 
         # Convolutions
         self.conv1 = nn.ConvTranspose2d(
-            in_channels=1024,
-            out_channels=512,
-            kernel_size=4,
-            stride=2,
-            padding=1)
-        self.bn2d1 = nn.BatchNorm2d(512)
-
-        # Convolutions
-        self.conv2 = nn.ConvTranspose2d(
             in_channels=512,
             out_channels=256,
             kernel_size=4,
             stride=2,
             padding=1)
-        self.bn2d2 = nn.BatchNorm2d(256)
+        self.bn2d1 = nn.BatchNorm2d(256)
 
         # Convolutions
-        self.conv3 = nn.ConvTranspose2d(
+        self.conv2 = nn.ConvTranspose2d(
             in_channels=256,
             out_channels=128,
             kernel_size=4,
             stride=2,
             padding=1)
-        self.bn2d3 = nn.BatchNorm2d(128)
+        self.bn2d2 = nn.BatchNorm2d(128)
 
         # Convolutions
-        self.conv4 = nn.ConvTranspose2d(
+        self.conv3 = nn.ConvTranspose2d(
             in_channels=128,
             out_channels=64,
             kernel_size=4,
             stride=2,
             padding=1)
-        self.bn2d4 = nn.BatchNorm2d(64)
+        self.bn2d3 = nn.BatchNorm2d(64)
 
         # Convolutions
-        self.conv5 = nn.ConvTranspose2d(
+        self.conv4 = nn.ConvTranspose2d(
             in_channels=64,
             out_channels=32,
             kernel_size=4,
             stride=2,
             padding=1)
-        self.bn2d5 = nn.BatchNorm2d(32)
+        self.bn2d4 = nn.BatchNorm2d(32)
 
-        self.conv6 = nn.ConvTranspose2d(
+        self.conv5 = nn.ConvTranspose2d(
             in_channels=32,
             out_channels=3,
             kernel_size=4,
@@ -106,7 +98,7 @@ class Generator(nn.Module):
         intermediate = self.relu(intermediate)
 
         # reshape
-        intermediate = intermediate.view((-1, 1024, 2, 2))
+        intermediate = intermediate.view((input_tensor.shape[0], 512, 2, 2))
 
         intermediate = self.conv1(intermediate)
         intermediate = self.bn2d1(intermediate)
@@ -125,10 +117,6 @@ class Generator(nn.Module):
         intermediate = self.relu(intermediate)
 
         intermediate = self.conv5(intermediate)
-        intermediate = self.bn2d5(intermediate)
-        intermediate = self.relu(intermediate)
-
-        intermediate = self.conv6(intermediate)
         output_tensor = self.tanh(intermediate)
         return output_tensor
 
@@ -171,18 +159,9 @@ class Discriminator(nn.Module):
             stride=2,
             padding=1,
             bias=True)
-        self.bn2d3 = nn.BatchNorm2d(128)
-
-        self.conv4 = nn.Conv2d(
-            in_channels=128,
-            out_channels=256,
-            kernel_size=4,
-            stride=2,
-            padding=1,
-            bias=True)
 
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(256 * 8 * 8, 1)
+        self.linear1 = nn.Linear(128 * 8 * 8, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_tensor):
@@ -199,14 +178,9 @@ class Discriminator(nn.Module):
         intermediate = self.conv3(intermediate)
         intermediate = self.leaky_relu(intermediate)
         intermediate = self.dropout_2d(intermediate)
-        intermediate = self.bn2d3(intermediate)
-
-        intermediate = self.conv4(intermediate)
-        intermediate = self.leaky_relu(intermediate)
-        intermediate = self.dropout_2d(intermediate)
 
         # reshape
-        intermediate = intermediate.view((-1, 256 * 8 * 8))
+        intermediate = intermediate.view((input_tensor.shape[0], 128 * 8 * 8))
         intermediate = self.linear1(intermediate)
         output_tensor = self.sigmoid(intermediate)
 
@@ -324,10 +298,15 @@ class DCGAN:
             random_idx = np.random.randint(0, current_batch_size, half_batch_size)
             random_half_batch = real_samples[random_idx]
 
-            ldr_, ldf_ = self.train_step_discriminator(real_samples, current_batch_size)
+            self.real_labels = torch.ones((half_batch_size, 1), device=self.device)
+            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=self.device)
+
+            self.fake_labels = torch.zeros((half_batch_size, 1), device=self.device)
+            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
+
+            ldr_, ldf_ = self.train_step_discriminator(random_half_batch, half_batch_size)
             loss_d_real_running += ldr_
             loss_d_fake_running += ldf_
-
 
         n_batches = len(self.dataloader)
         loss_g_running /= n_batches
@@ -349,10 +328,15 @@ if __name__ == '__main__':
     """
 
     output_dir = '../output/dcgan_test_pytorch'
-    image_size = 128
-    batch_size = 64
+    image_size = 64  # for 128 just add conv layer in both generator and discriminator and adjust shape
+    batch_size = 128
     epochs = 200
     latent_dim = 100
+    # Number of GPUs available. Use 0 for CPU mode.
+    ngpu = 1
+
+    # Decide which device we want to run on
+    dev = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir)
@@ -374,17 +358,26 @@ if __name__ == '__main__':
         elif int(dob) < death_monet:
             other_artists_to_consider_dict[artist_name] = artist_id
 
-    # Number of GPUs available. Use 0 for CPU mode.
-    ngpu = 1
-
-    # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-
     train_impressionist = PaintingsFolder(
         root='../dataset/best_artworks/images',
         transform=transforms.Compose([
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_impressionist_augment1 = PaintingsFolder(
+        root='../dataset/best_artworks/images',
+        transform=transforms.Compose([
+            transforms.TrivialAugmentWide(),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
             transforms.ToTensor(),
 
             # normalizes images in range [-1,1]
@@ -397,8 +390,8 @@ if __name__ == '__main__':
     train_others = PaintingsFolder(
         root='../dataset/best_artworks/images',
         transform=transforms.Compose([
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
             transforms.ToTensor(),
 
             # normalizes images in range [-1,1]
@@ -408,15 +401,33 @@ if __name__ == '__main__':
         artists_dict=other_artists_to_consider_dict
     )
 
-    dataset = ConcatDataset([train_impressionist, train_others])
+    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
+    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
+    subset_idx_list = []
+    current_artist_id = train_others.targets[0]
+    idx_paintings_current = []
+    for i in range(len(train_others.targets)):
+        if train_others.targets[i] != current_artist_id:
+            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
+            subset_idx_list.extend(idx_paintings_to_hold)
+
+            current_artist_id = train_others.targets[i]
+            idx_paintings_current.clear()
+        else:
+            indices_paintings = idx_paintings_current.append(i)
+
+    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
+
+    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
+    dataset = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
 
     # Create the dataloader
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                              shuffle=True, num_workers=2)
 
     # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
-    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
-    gan = DCGAN(latent_dim, noise_fn, dataloader, batch_size=batch_size, device=device)
+    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=dev)
+    gan = DCGAN(latent_dim, noise_fn, dataloader, batch_size=batch_size, device=dev)
 
     start = time()
     for i in range(epochs):
