@@ -8,19 +8,18 @@ from torchvision.datasets import ImageFolder
 class PaintingsFolder(ImageFolder):
 
     def __init__(
-        self,
-        root: str,
-        artists_dict: Dict,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-        is_valid_file: Optional[Callable[[str], bool]] = None,
+            self,
+            root: str,
+            artists_dict: Dict,
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            is_valid_file: Optional[Callable[[str], bool]] = None,
 
     ) -> None:
 
         # save artists in format 'name_surname'
         self.artists_dict = dict()
         for artist_name, artist_id in artists_dict.items():
-
             artist_names = artist_name.split(' ')
 
             valid_artist_name = '_'.join(artist_names)
@@ -31,8 +30,10 @@ class PaintingsFolder(ImageFolder):
 
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
 
-        classes = sorted(name for name in os.listdir(directory)
-                         if os.path.isdir(os.path.join(directory, name)) and name in set(self.artists_dict.keys()))
+        all_artists = set(name for name in os.listdir(directory)
+                          if os.path.isdir(os.path.join(directory, name)))
+
+        classes = list(all_artists & set(self.artists_dict.keys()))
         if not classes:
             raise FileNotFoundError(f"Couldn't find any class folder in {directory}.")
 
