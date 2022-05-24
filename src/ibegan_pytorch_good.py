@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from torch import optim
 
-from began_pytorch_good import BEGAN, clean_dataset
+from src.began_pytorch_good import BEGAN, clean_dataset
 import torch.nn as nn
 import torchvision.utils as vutils
 from matplotlib import pyplot as plt
