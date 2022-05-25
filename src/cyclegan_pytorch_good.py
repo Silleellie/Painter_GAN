@@ -156,28 +156,16 @@ class CYCLEGAN:
         Given a list of images from domain B, passes it to the generator 
         to obtain images associated to the domain A
         """
-        samples = []
-        
         with torch.no_grad():
-            for img in images_vec:
-                gen_img = self.generator_a2b(img).detach().cpu()
-                samples.append(gen_img)
-
-        return samples
+            return self.generator_a2b(images_vec).detach().cpu()
     
     def generate_images_b2a(self, images_vec=None):
         """
         Given a list of images from domain A, passes it to the generator 
         to obtain images associated to the domain B
         """
-        samples = []
-
         with torch.no_grad():
-            for img in images_vec:
-                gen_img = self.generator_b2a(img).detach().cpu()
-                samples.append(gen_img)
-
-        return samples
+            return self.generator_b2a(images_vec).detach().cpu()
 
     def train_epoch(self):
         """
@@ -342,6 +330,7 @@ if __name__ == '__main__':
             test_airplane_list.append(airplane.to(device))
         else:
             break
+    test_airplane_list = torch.stack(test_airplane_list)
 
     for i in range(epochs):
         print(f"Epoch {i+1}; Elapsed time = {int(time() - start)}s")
