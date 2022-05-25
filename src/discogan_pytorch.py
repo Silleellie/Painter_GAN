@@ -349,7 +349,7 @@ if __name__ == '__main__':
         plt.axis("off")
         plt.title(f"Epoch {i+1}")
         plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'cyclegan_test_pytorch_art_2/epoch{i+1}.png')
+        plt.savefig(f'discogan_test_pytorch_art/epoch{i+1}.png')
 
             
             
