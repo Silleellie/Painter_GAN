@@ -1,17 +1,22 @@
 import os
 import shutil
+import re
+import random
 
 import torch
 import torch.nn as nn
 from torch import optim
 from time import time
 import torch.utils.data
-import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 import numpy as np
+import pandas as pd
 from matplotlib import pyplot as plt
 from torch.utils.data import ConcatDataset
+
+from src.utils import PaintingsFolder
+from src.began_pytorch_good import clean_dataset
 
 """
 
@@ -48,13 +53,13 @@ class Generator(nn.Module):
         """
         super().__init__()
         self.body = nn.Sequential(
-            Generator._default_block(channels_noise, features_gen * 4, 4, 1, 0),    # 4x4
-            Generator._default_block(features_gen * 4, features_gen * 2, 4, 2, 1),   # 8x8
-            Generator._default_block(features_gen * 2, features_gen, 4, 2, 1),   # 16x16
+            Generator._default_block(channels_noise, features_gen * 4, 4, 1, 0),
+            Generator._default_block(features_gen * 4, features_gen * 4, 4, 2, 1), 
+            Generator._default_block(features_gen * 4, features_gen * 2, 4, 2, 1), 
+            Generator._default_block(features_gen * 2, features_gen, 4, 2, 1), 
             nn.ConvTranspose2d(
                 features_gen, channels_img, kernel_size=4, stride=2, padding=1, bias=False),
             nn.Tanh()
-            # out dimension: [N x 3 x 32 x 32] with range [-1, 1]
         )
 
     @staticmethod
@@ -80,6 +85,7 @@ class Critic(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             Critic._default_block(features_d, features_d * 2, 4, 2, 1),
             Critic._default_block(features_d * 2, features_d * 4, 4, 2, 1),
+            Critic._default_block(features_d * 4, features_d * 4, 4, 2, 1),
             nn.Conv2d(features_d * 4, 1, kernel_size=4, stride=1, padding=0, bias=False)
         )
 
@@ -216,7 +222,7 @@ class WGAN_GP:
     def train_epoch(self):
         """Train both networks for one epoch and return the losses."""
         loss_g_running, loss_c_running = 0, 0
-        for batch, (real_samples, _) in enumerate(self.dataloader):
+        for _, (real_samples, _) in enumerate(self.dataloader):
 
             current_batch_size = real_samples.size(0)
 
@@ -236,9 +242,10 @@ if __name__ == '__main__':
     shutil.rmtree("wgan_test_pytorch", ignore_errors=True)
     os.makedirs("wgan_test_pytorch")
 
-    image_size = 32
+    resized_images_dir = '../dataset/best_artworks/resized/resized'
+    image_size = 64
     batch_size = 64
-    epochs = 100
+    epochs = 100 # ideally 200k as stated in the wgan-gp paper
     latent_dim = 100
 
     # Number of GPUs available. Use 0 for CPU mode.
@@ -247,43 +254,91 @@ if __name__ == '__main__':
     # Decide which device we want to run on
     device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 
-    train = dset.CIFAR10(root='../dataset/cifar10',
-                         transform=transforms.Compose([
-                             transforms.Resize(32),
-                             transforms.CenterCrop(32),
-                             transforms.ToTensor(),
+    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
 
-                             # normalizes images in range [-1,1]
-                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    death_monet = 1926
+    impressionist_artists_dict = dict()
+    other_artists_to_consider_dict = dict()
+    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
+                                                                       metadata_csv['name'],
+                                                                       metadata_csv['years'],
+                                                                       metadata_csv['genre']):
 
-                         ]),
-                         train=True,
-                         download=True
-                         )
+        dob = artist_years.split(' ')[0]
+        if re.search(r'impressionism', artistic_movement.lower()):
 
-    train_airplane_indexes = [i for i, target in enumerate(train.targets) if target == 0]
-    train_airplane = torch.utils.data.Subset(train, train_airplane_indexes)
+            impressionist_artists_dict[artist_name] = artist_id
+        elif int(dob) < death_monet:
+            other_artists_to_consider_dict[artist_name] = artist_id
 
-    test = dset.CIFAR10(root='../dataset/cifar10',
-                        transform=transforms.Compose([
-                            transforms.Resize(32),
-                            transforms.CenterCrop(32),
-                            transforms.ToTensor(),
+    clean_dataset(resized_images_dir)
 
-                            # normalizes images in range [-1,1]
-                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                        ]),
-                        train=False,
-                        download=True
-                        )
+    train_impressionist = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
 
-    test_airplane_indexes = [i for i, target in enumerate(test.targets) if target == 0]
-    test_airplane = torch.utils.data.Subset(test, test_airplane_indexes)
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 
-    dataset = ConcatDataset([train_airplane, test_airplane])
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_impressionist_augment1 = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.TrivialAugmentWide(),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_others = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=other_artists_to_consider_dict
+    )
+
+    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
+    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
+    subset_idx_list = []
+    current_artist_id = train_others.targets[0]
+    idx_paintings_current = []
+    for i in range(len(train_others.targets)):
+        if train_others.targets[i] != current_artist_id:
+            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
+            subset_idx_list.extend(idx_paintings_to_hold)
+
+            current_artist_id = train_others.targets[i]
+            idx_paintings_current.clear()
+        else:
+            indices_paintings = idx_paintings_current.append(i)
+
+    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
+
+    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
+    dataset = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
 
     # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+                                             shuffle=True, num_workers=2)
 
     # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
     noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim, 1, 1), device=device)
