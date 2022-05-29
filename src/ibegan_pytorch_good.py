@@ -243,6 +243,9 @@ class IBEGAN(BEGAN):
         self.criterion_noisy = nn.MSELoss()
         self.lambda_noise = 2
 
+        self.scheduler_d = optim.lr_scheduler.ReduceLROnPlateau(self.optim_d)
+        self.scheduler_g = optim.lr_scheduler.ReduceLROnPlateau(self.optim_g)
+
     def train_step_discriminator(self, real_samples, current_batch_size):
         """Train the discriminator one step and return the losses."""
         pred_real = self.discriminator(real_samples)
@@ -257,7 +260,7 @@ class IBEGAN(BEGAN):
 
         # denoising loss
         noise = torch.randn_like(real_samples)
-        noisy_samples = real_samples + noise * 0.5  # 0.5 to reduce noisy factor
+        noisy_samples = real_samples + noise * 0.2  # 0.2 to reduce noisy factor
         pred_noisy = self.discriminator(noisy_samples)
         loss_noisy = self.criterion_noisy(pred_noisy, noisy_samples)
 
@@ -290,12 +293,12 @@ if __name__ == '__main__':
 
     resized_images_dir = '../dataset/best_artworks/resized/resized'
     image_size = 64
-    batch_size = 64
+    batch_size = 16
     epochs = 500
     latent_dim = 128
     num_filters = 64
     lr_discriminator = 0.0001
-    lr_generator = 0.0001
+    lr_generator = 0.0005
 
     # Number of GPUs available. Use 0 for CPU mode.
     ngpu = 1
