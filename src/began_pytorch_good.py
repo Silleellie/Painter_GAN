@@ -217,11 +217,8 @@ class BEGAN:
         self.lambda_k = 0.001  # used in paper
         self.Kt = 0.0  # starts at 0
 
-        self.global_iter = 0
-        self.lr_step_size = len(self.dataloader.dataset) // self.batch_size * self.total_epochs // 8
-
-        self.scheduler_d = optim.lr_scheduler.StepLR(self.optim_d, step_size=1, gamma=0.5)
-        self.scheduler_g = optim.lr_scheduler.StepLR(self.optim_g, step_size=1, gamma=0.5)
+        self.scheduler_d = optim.lr_scheduler.ReduceLROnPlateau(self.optim_d)
+        self.scheduler_g = optim.lr_scheduler.ReduceLROnPlateau(self.optim_g)
 
     def generate_samples(self, latent_vec=None, num=None):
         """Sample images from the generator.
@@ -262,8 +259,9 @@ class BEGAN:
 
         # generated samples
         latent_vec = self.noise_fn(current_batch_size)
-        fake_samples = self.generator(latent_vec)
-        pred_fake = self.discriminator(fake_samples.detach())
+        with torch.no_grad():
+            fake_samples = self.generator(latent_vec)
+        pred_fake = self.discriminator(fake_samples)
         loss_fake = self.criterion(pred_fake, fake_samples)  # l1_loss
 
         # combine two losses
@@ -278,8 +276,6 @@ class BEGAN:
     def train_epoch(self):
         loss_g_running, loss_d_running, M_running = 0, 0, 0
         for batch, (real_samples, _) in enumerate(self.dataloader):
-            self.global_iter += 1
-
             current_batch_size = real_samples.size(0)
 
             real_samples = real_samples.to(self.device)
@@ -311,14 +307,13 @@ class BEGAN:
             loss_g_running += loss_g.item()
             M_running += M
 
-            if self.global_iter % self.lr_step_size == 0:
-                self.scheduler_g.step()
-                self.scheduler_d.step()
-
         n_batches = len(self.dataloader)
         loss_g_running /= n_batches
         loss_d_running /= n_batches
         M_running /= n_batches
+
+        self.scheduler_g.step(loss_g_running)
+        self.scheduler_d.step(loss_d_running)
 
         return loss_g_running, loss_d_running, M_running, self.Kt
 
