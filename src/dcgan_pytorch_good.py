@@ -16,6 +16,7 @@ from matplotlib import pyplot as plt
 from torch.utils.data import ConcatDataset
 
 from src.utils import PaintingsFolder
+from src.began_pytorch_good import clean_dataset
 
 
 def weights_init(m):
@@ -328,6 +329,7 @@ if __name__ == '__main__':
     """
 
     output_dir = '../output/dcgan_test_pytorch'
+    resized_images_dir = '../dataset/best_artworks/resized/resized'
     image_size = 64  # for 128 just add conv layer in both generator and discriminator and adjust shape
     batch_size = 128
     epochs = 200
@@ -341,7 +343,7 @@ if __name__ == '__main__':
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir)
 
-    metadata_csv = pd.read_csv('../dataset/best_artworks/artists_good.csv')
+    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
 
     death_monet = 1926
     impressionist_artists_dict = dict()
@@ -358,8 +360,10 @@ if __name__ == '__main__':
         elif int(dob) < death_monet:
             other_artists_to_consider_dict[artist_name] = artist_id
 
+    clean_dataset(resized_images_dir)
+
     train_impressionist = PaintingsFolder(
-        root='../dataset/best_artworks/images',
+        root=resized_images_dir,
         transform=transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.CenterCrop((image_size, image_size)),
@@ -373,7 +377,7 @@ if __name__ == '__main__':
     )
 
     train_impressionist_augment1 = PaintingsFolder(
-        root='../dataset/best_artworks/images',
+        root=resized_images_dir,
         transform=transforms.Compose([
             transforms.TrivialAugmentWide(),
             transforms.Resize((image_size, image_size)),
@@ -388,7 +392,7 @@ if __name__ == '__main__':
     )
 
     train_others = PaintingsFolder(
-        root='../dataset/best_artworks/images',
+        root=resized_images_dir,
         transform=transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.CenterCrop((image_size, image_size)),
