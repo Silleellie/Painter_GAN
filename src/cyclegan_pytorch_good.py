@@ -1,17 +1,25 @@
 import os
 import shutil
+import re
+import random
 
 import torch
 import torch.nn as nn
 from torch import optim
 from time import time
 import torch.utils.data
+from torch.utils.data import ConcatDataset
+import torch.utils.data as data_utils
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 import numpy as np
+import pandas as pd
 from matplotlib import pyplot as plt
 import itertools
+
+from src.utils import PaintingsFolder
+from src.began_pytorch_good import clean_dataset
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -49,10 +57,12 @@ class Generator(nn.Module):
         
         layers.extend(self._default_block_downsample(features_gen, features_gen*2))
         layers.extend(self._default_block_downsample(features_gen*2, features_gen*4))
+        layers.extend(self._default_block_downsample(features_gen*4, features_gen*4))
 
         for _ in range(num_res_blocks):
             layers.append(ResidualBlock(features_gen*4))
         
+        layers.extend(self._default_block_upsample(features_gen*4, features_gen*4))
         layers.extend(self._default_block_upsample(features_gen*4, features_gen*2))
         layers.extend(self._default_block_upsample(features_gen*2, features_gen))
 
@@ -89,6 +99,7 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             Discriminator._default_block(features_d, features_d * 2, 4, 2, 1),
             Discriminator._default_block(features_d * 2, features_d * 4, 4, 2, 1),
+            Discriminator._default_block(features_d * 4, features_d * 4, 4, 2, 1),
             nn.ZeroPad2d((1,0,1,0)),
             nn.Conv2d(features_d * 4, 1, kernel_size=4, stride=1, padding=1, bias=False)
         )
@@ -105,7 +116,7 @@ class Discriminator(nn.Module):
         return self.body(x)
 
 class CYCLEGAN:
-    def __init__(self, dataloader, lr_decay_func, batch_size=32, lr=0.002, device: torch.device ='cpu',
+    def __init__(self, dataloader_a, dataloader_b, lr_decay_func, batch_size=32, lr=0.002, device: torch.device ='cpu',
                  lambda_cycle=10.0, lambda_identity=5.0, num_res_blocks=6,
                  adversarial_criterion = nn.MSELoss(), cycle_criterion = nn.L1Loss(), identity_criterion = nn.L1Loss()):
         """
@@ -126,7 +137,8 @@ class CYCLEGAN:
         self.optim_d_a = optim.Adam(self.discriminator_a.parameters(), lr=lr, betas=(0.5, 0.999))
         self.optim_d_b = optim.Adam(self.discriminator_b.parameters(), lr=lr, betas=(0.5, 0.999))
 
-        self.dataloader = dataloader
+        self.dataloader_a = dataloader_a
+        self.dataloader_b = dataloader_b
         self.batch_size = batch_size
         self.device = device
 
@@ -153,16 +165,16 @@ class CYCLEGAN:
     
     def generate_images_a2b(self, images_vec=None):
         """
-        Given a list of images from domain B, passes it to the generator 
-        to obtain images associated to the domain A
+        Given a list of images from domain A, passes it to the generator 
+        to obtain images associated to the domain B
         """
         with torch.no_grad():
             return self.generator_a2b(images_vec).detach().cpu()
     
     def generate_images_b2a(self, images_vec=None):
         """
-        Given a list of images from domain A, passes it to the generator 
-        to obtain images associated to the domain B
+        Given a list of images from domain B, passes it to the generator 
+        to obtain images associated to the domain A
         """
         with torch.no_grad():
             return self.generator_b2a(images_vec).detach().cpu()
@@ -173,10 +185,10 @@ class CYCLEGAN:
         Reference used for epoch training code: https://www.kaggle.com/code/lmyybh/pytorch-cyclegan
         """
         loss_g_running, loss_d_running = 0, 0
-        for _, images in enumerate(self.dataloader):
+        for (images_a, images_b) in zip(self.dataloader_a, self.dataloader_b):
             
-            real_A = images["A"].to(self.device)
-            real_B = images["B"].to(self.device)
+            real_A = images_a[0].to(self.device)
+            real_B = images_b[0].to(self.device)
 
             self.optim_g.zero_grad()
 
@@ -245,50 +257,23 @@ class CYCLEGAN:
         self.lr_scheduler_D_A.step()
         self.lr_scheduler_D_B.step()
 
-        n_batches = len(self.dataloader)
+        n_batches = min(len(self.dataloader_a), len(self.dataloader_b))
         loss_g_running /= n_batches
         loss_d_running /= n_batches
 
         return loss_g_running, loss_d_running
-
-class Cifar10PlanesCars(torch.utils.data.Dataset):
-    def __init__(self) -> None:
-        super().__init__()
-
-        train = dset.CIFAR10(root='../dataset/cifar10',
-                            transform=transforms.Compose([
-                                transforms.Resize(32),
-                                transforms.CenterCrop(32),
-                                transforms.ToTensor(),
-                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                            ]),
-                            train=True,
-                            download=True
-                            )
-
-        train_airplane_indexes = [i for i, target in enumerate(train.targets) if target == 0]
-        self.train_airplane = torch.utils.data.Subset(train, train_airplane_indexes)
-
-        train_car_indexes = [i for i, target in enumerate(train.targets) if target == 1]
-        self.train_car = torch.utils.data.Subset(train, train_car_indexes)
-    
-    def __getitem__(self, index):
-        return {'A': self.train_airplane[index][0], 'B': self.train_car[index][0]}
-    
-    def __len__(self):
-        return len(self.train_airplane)
-
 
 if __name__ == '__main__':
     """
     CYCLEGAN PAPER
     https://arxiv.org/abs/1703.10593
     """
-    shutil.rmtree("cyclegan_test_pytorch", ignore_errors=True)
-    os.makedirs("cyclegan_test_pytorch")
+    shutil.rmtree("cyclegan_test_pytorch_art_2", ignore_errors=True)
+    os.makedirs("cyclegan_test_pytorch_art_2")
 
-    image_size = 32
-    batch_size = 64
+    resized_images_dir = '../dataset/best_artworks/resized/resized'
+    image_size = 64
+    batch_size = 32
 
     # as in the paper, after 100 epochs (out of 200) the learning rate should start decaying
     epochs = 200
@@ -300,37 +285,124 @@ if __name__ == '__main__':
     # Decide which device we want to run on
     device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 
-    dataset = Cifar10PlanesCars()
+    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
+
+    death_monet = 1926
+    impressionist_artists_dict = dict()
+    other_artists_to_consider_dict = dict()
+    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
+                                                                       metadata_csv['name'],
+                                                                       metadata_csv['years'],
+                                                                       metadata_csv['genre']):
+
+        dob = artist_years.split(' ')[0]
+        if re.search(r'impressionism', artistic_movement.lower()):
+
+            impressionist_artists_dict[artist_name] = artist_id
+        elif int(dob) < death_monet:
+            other_artists_to_consider_dict[artist_name] = artist_id
+
+    clean_dataset(resized_images_dir)
+
+    train_impressionist = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_impressionist_augment1 = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.TrivialAugmentWide(),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_others = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=other_artists_to_consider_dict
+    )
+
+    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
+    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
+    subset_idx_list = []
+    current_artist_id = train_others.targets[0]
+    idx_paintings_current = []
+    for i in range(len(train_others.targets)):
+        if train_others.targets[i] != current_artist_id:
+            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
+            subset_idx_list.extend(idx_paintings_to_hold)
+
+            current_artist_id = train_others.targets[i]
+            idx_paintings_current.clear()
+        else:
+            indices_paintings = idx_paintings_current.append(i)
+
+    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
+
+    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
+    dataset_a = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
+
+    ds_path_b = "../dataset/photo_jpg"
+    ds_path_test = "../dataset/photo_jpg_test"
+
+    transformers=transforms.Compose([transforms.Resize(image_size), 
+        transforms.CenterCrop(image_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+    dataset_b = dset.ImageFolder(root=ds_path_b, transform=transformers)
+
+    if len(dataset_a) < len(dataset_b):
+        indices = torch.arange(len(dataset_a))
+        dataset_b = data_utils.Subset(dataset_b, indices)
+    elif len(dataset_a) > len(dataset_b):
+        indices = torch.arange(len(dataset_b))
+        dataset_a = data_utils.Subset(dataset_a, indices)
 
     # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    dataloader_a = torch.utils.data.DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
+    dataloader_b = torch.utils.data.DataLoader(dataset_b, batch_size=batch_size, shuffle=True, num_workers=0)
 
     # function for the learning rate decay
     lr_decay_func = lambda epoch: 1 - max(0, epoch-decay_epoch)/(epochs-decay_epoch)
-    gan = CYCLEGAN(dataloader, lr_decay_func, batch_size=batch_size, device=device)
+    gan = CYCLEGAN(dataloader_a, dataloader_b, lr_decay_func, batch_size=batch_size, device=device)
 
     start = time()
 
-    test = dset.CIFAR10(root='../dataset/cifar10',
-                        transform=transforms.Compose([
-                            transforms.Resize(32),
-                            transforms.CenterCrop(32),
-                            transforms.ToTensor(),
-                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                        ]),
-                        train=False,
-                        download=True
-                        )
-    test_airplane_indexes = [i for i, target in enumerate(test.targets) if target == 0]
-    test_airplane = torch.utils.data.Subset(test, test_airplane_indexes)
+    test_set = dset.ImageFolder(root=ds_path_test, transform=transformers)
 
-    test_airplane_list = []
-    for i, (airplane, _) in enumerate(test_airplane):
+    test_set_list = []
+    for i, (image, _) in enumerate(test_set):
         if i < 64:
-            test_airplane_list.append(airplane.to(device))
+            test_set_list.append(image.to(device))
         else:
             break
-    test_airplane_list = torch.stack(test_airplane_list)
+    test_set_list = torch.stack(test_set_list)
 
     for i in range(epochs):
         print(f"Epoch {i+1}; Elapsed time = {int(time() - start)}s")
@@ -339,10 +411,10 @@ if __name__ == '__main__':
 
         print(f"G_loss -> {g_loss}, D_loss -> {d_loss}\n")
 
-        images = gan.generate_images_a2b(test_airplane_list)
+        images = gan.generate_images_b2a(test_set_list)
         
         ims = vutils.make_grid(images, padding=2, normalize=True)
         plt.axis("off")
         plt.title(f"Epoch {i+1}")
         plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'cyclegan_test_pytorch/epoch{i+1}.png')
+        plt.savefig(f'cyclegan_test_pytorch_art_2/epoch{i+1}.png')

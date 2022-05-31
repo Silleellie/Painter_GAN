@@ -1,21 +1,40 @@
 import itertools
 import os
+import re
 import shutil
 
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 from time import time
 import torch.utils.data
-import torchvision.datasets as dset
+import random
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import ConcatDataset
 
-torch.cuda.empty_cache()
+from src.began_pytorch_good import clean_dataset
+from src.utils import PaintingsFolder
+
+
+class NormalNLLLoss:
+    """
+    Calculate the negative log likelihood
+    of normal distribution.
+    This needs to be minimised.
+    Treating Q(cj | x) as a factored Gaussian.
+    """
+
+    def __call__(self, x, mu, var):
+        logli = -0.5 * (var.mul(2 * np.pi) + 1e-6).log() - (x - mu).pow(2).div(var.mul(2.0) + 1e-6)
+        nll = -(logli.sum(1).mean())
+
+        return nll
+
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -44,13 +63,13 @@ class Generator(nn.Module):
     def _init_modules(self):
         """Initialize the modules."""
         # Project the input
-        self.linear1 = nn.Linear(self.initial_dimension, 512*2*2)
+        self.linear1 = nn.Linear(self.initial_dimension, 448*2*2)
         self.relu = nn.ReLU()
-        self.bn1d0 = nn.BatchNorm1d(512*2*2)
+        self.bn1d0 = nn.BatchNorm1d(448*2*2)
 
         # Convolutions
         self.conv1 = nn.ConvTranspose2d(
-                in_channels=512,
+                in_channels=448,
                 out_channels=256,
                 kernel_size=4,
                 stride=2,
@@ -89,7 +108,7 @@ class Generator(nn.Module):
         intermediate = self.bn1d0(intermediate)
 
         # reshape
-        intermediate = intermediate.view((-1, 512, 2, 2))
+        intermediate = intermediate.view((input_tensor.shape[0], 448, 2, 2))
 
         intermediate = self.conv1(intermediate)
         intermediate = self.relu(intermediate)
@@ -102,6 +121,7 @@ class Generator(nn.Module):
         intermediate = self.relu(intermediate)
 
         intermediate = self.conv4(intermediate)
+
         output_tensor = self.tanh(intermediate)
 
         return output_tensor
@@ -122,178 +142,79 @@ class Discriminator(nn.Module):
 
     def _init_modules(self):
         """Initialize the modules."""
-        self.leaky_relu = nn.LeakyReLU(0.1)
 
-        self.conv1 = nn.Conv2d(
-                in_channels=3,
-                out_channels=64,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+        # BLOCK SHARED BY DISCRIMINATOR AND AUXILIARY
+        self.shared_block = nn.Sequential(
+            nn.Conv2d(
+                    in_channels=3,
+                    out_channels=64,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.Conv2d(
+                    in_channels=64,
+                    out_channels=128,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
 
-        self.conv2 = nn.Conv2d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-        self.bn2d2 = nn.BatchNorm2d(128)
-
-        self.conv3 = nn.Conv2d(
-                in_channels=128,
-                out_channels=256,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-        self.bn2d3 = nn.BatchNorm2d(256)
-
-        self.flatten = nn.Flatten()
+            nn.Conv2d(
+                    in_channels=128,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+        )
 
         # DISCRIMINATOR BLOCK
-        self.linear1_disc = nn.Linear(256*4*4, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.discriminator_block = nn.Sequential(
+            nn.Linear(256*4*4, 1),
+            nn.Sigmoid()
+        )
 
         # AUXILIARY BLOCK
-        self.linear1_aux = nn.Linear(256*4*4, 128)
-        self.bn2d4_aux = nn.BatchNorm1d(128)
-        self.linear_cat_aux = nn.Linear(128, self.n_categorical)
-        self.softmax = nn.Softmax()
+        self.auxiliary_block = nn.Sequential(
+            nn.Linear(256*4*4, 128),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True)
+        )
 
-        # FC layer for continuous output:
-        # Gaussian distribution mean (continuous output)
-        # Gaussian distribution standard deviation (exponential activation to ensure the value is positive)
-        self.linear_continuous_aux = nn.Linear(128, self.n_continuous)
-        self.exp_activation = lambda x: torch.exp(x)
+        self.auxiliary_block_cat = nn.Sequential(
+            nn.Linear(128, self.n_categorical),
+            nn.Softmax(dim=1)
+        )
+        self.auxiliary_block_mu = nn.Linear(128, self.n_continuous)
+        self.auxiliary_block_sigma = nn.Linear(128, self.n_continuous)
 
-    def forward(self, input_tensor, also_auxiliary_output=False):
+    def forward(self, input_tensor, as_auxiliary=False):
         """Forward pass; map samples to confidence they are real [0, 1]."""
-        intermediate = self.conv1(input_tensor)
-        intermediate = self.leaky_relu(intermediate)
+        intermediate = self.shared_block(input_tensor)
 
-        intermediate = self.conv2(intermediate)
-        intermediate = self.leaky_relu(intermediate)
-        intermediate = self.bn2d2(intermediate)
+        intermediate = intermediate.view((input_tensor.shape[0], 256*4*4))
 
-        intermediate = self.conv3(intermediate)
-        intermediate = self.leaky_relu(intermediate)
-        intermediate = self.bn2d3(intermediate)
+        if as_auxiliary is False:
+            discriminator_output = self.discriminator_block(intermediate)
 
-        intermediate = self.flatten(intermediate)
-
-        intermediate = intermediate.view((-1, 256*4*4))
-        disc_intermediate = self.linear1_disc(intermediate)
-
-        # prediction, discriminator output
-        disc_output_tensor = self.sigmoid(disc_intermediate)
-
-        if also_auxiliary_output is True:
-            # aux output
-            aux_intermediate = self.linear1_aux(intermediate)
-            aux_intermediate = self.bn2d4_aux(aux_intermediate)
-
-            aux_discrete_intermediate = self.linear_cat_aux(aux_intermediate)
-            aux_discrete_output = self.softmax(aux_discrete_intermediate)
-
-            aux_mu_output = self.linear_continuous_aux(aux_intermediate)
-
-            aux_sigma_intermediate = self.linear_continuous_aux(aux_intermediate)
-            aux_sigma_output = self.exp_activation(aux_sigma_intermediate)
-
-            return disc_output_tensor, aux_discrete_output, (aux_mu_output, aux_sigma_output)
+            return discriminator_output
         else:
-            return disc_output_tensor
+            aux_intermediate = self.auxiliary_block(intermediate)
 
+            latent_cat = self.auxiliary_block_cat(aux_intermediate).squeeze()
+            latent_continuous_mu = self.auxiliary_block_mu(aux_intermediate).squeeze()
+            latent_continuous_sigma = self.auxiliary_block_sigma(aux_intermediate).squeeze().exp()
 
-class Auxiliary(nn.Module):
-
-    def __init__(self, n_categorical, n_continuous):
-        """A discriminator for discerning real from generated images.
-        Images must be single-channel and 28x28 pixels.
-        Output activation is Sigmoid.
-        """
-        self.n_categorical = n_categorical
-        self.n_continuous = n_continuous
-
-        super(Auxiliary, self).__init__()
-        self._init_modules()
-
-    def _init_modules(self):
-        """Initialize the modules."""
-        self.leaky_relu = nn.LeakyReLU(0.1)
-
-        self.conv1 = nn.Conv2d(
-                in_channels=3,
-                out_channels=64,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-
-        self.conv2 = nn.Conv2d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-        self.bn2d2 = nn.BatchNorm2d(128)
-
-        self.conv3 = nn.Conv2d(
-                in_channels=128,
-                out_channels=256,
-                kernel_size=4,
-                stride=2,
-                padding=1)
-
-        self.bn2d3 = nn.BatchNorm2d(256)
-
-        self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(256*4*4, 128)
-
-        self.bn2d4 = nn.BatchNorm1d(128)
-
-        self.linear_cat = nn.Linear(128, self.n_categorical)
-        self.softmax = nn.Softmax()
-
-        # FC layer for continuous output:
-        # Gaussian distribution mean (continuous output)
-        # Gaussian distribution standard deviation (exponential activation to ensure the value is positive)
-        self.linear_continuous = nn.Linear(128, self.n_continuous)
-
-        self.exp_activation = lambda x: torch.exp(x)
-
-    def forward(self, input_tensor):
-        """Forward pass; map samples to confidence they are real [0, 1]."""
-        intermediate = self.conv1(input_tensor)
-        intermediate = self.leaky_relu(intermediate)
-
-        intermediate = self.conv2(intermediate)
-        intermediate = self.leaky_relu(intermediate)
-        intermediate = self.bn2d2(intermediate)
-
-        intermediate = self.conv3(intermediate)
-        intermediate = self.leaky_relu(intermediate)
-        intermediate = self.bn2d3(intermediate)
-
-        intermediate = self.flatten(intermediate)
-
-        intermediate = intermediate.view((-1, 256*4*4))
-        intermediate = self.linear1(intermediate)
-        intermediate = self.bn2d4(intermediate)
-
-        discrete_intermediate = self.linear_cat(intermediate)
-        discrete_output = self.softmax(discrete_intermediate)
-
-        mu_output = self.linear_continuous(intermediate)
-
-        sigma_intermediate = self.linear_continuous(intermediate)
-        sigma_output = self.exp_activation(sigma_intermediate)
-
-        return discrete_output, mu_output, sigma_output
+            return latent_cat, latent_continuous_mu, latent_continuous_sigma
 
 
 class InfoGAN:
 
     def __init__(self, latent_dim, noise_fn, dataloader, n_categorical, continuous_list,
-                 batch_size=32, lr_d=0.0004, lr_g=0.0004, lr_q=0.0004, device: torch.device ='cpu'):
+                 batch_size=32, lr_d=0.0004, lr_g=0.0004, device: torch.device ='cpu'):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -314,9 +235,6 @@ class InfoGAN:
         self.discriminator = Discriminator(self.n_categorical, len(continuous_list)).to(device)
         self.discriminator.apply(weights_init)
 
-        self.auxiliary = Auxiliary(self.n_categorical, len(continuous_list)).to(device)
-        self.auxiliary.apply(weights_init)
-
         self.noise_fn = noise_fn
         self.dataloader = dataloader
         self.batch_size = batch_size
@@ -324,13 +242,20 @@ class InfoGAN:
 
         self.binary_loss = nn.BCELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
+        self.continuous_loss = NormalNLLLoss()
 
-        self.optim_d = optim.Adam(self.discriminator.parameters(),
+        self.optim_d = optim.Adam(itertools.chain(*[self.discriminator.shared_block.parameters(),
+                                                    self.discriminator.discriminator_block.parameters()]),
+
                                   lr=lr_d, betas=(0.5, 0.999))
-        self.optim_g = optim.Adam(self.generator.parameters(),
+
+        self.optim_g = optim.Adam(itertools.chain(*[self.generator.parameters(),
+                                                    self.discriminator.auxiliary_block.parameters(),
+                                                    self.discriminator.auxiliary_block_cat.parameters(),
+                                                    self.discriminator.auxiliary_block_mu.parameters(),
+                                                    self.discriminator.auxiliary_block_sigma.parameters()]),
+
                                   lr=lr_g, betas=(0.5, 0.999))
-        self.optim_q = optim.Adam(self.auxiliary.parameters(),
-                                  lr=lr_q, betas=(0.5, 0.999))
 
         self.real_labels = None
         self.fake_labels = None
@@ -358,7 +283,7 @@ class InfoGAN:
 
         return batch_latent_vec, batch_categorical_label, batch_c_tensor
 
-    def generate_samples(self, latent_vec=None, num=None):
+    def generate_samples(self, batch_latent_vec=None, batch_categorical_label=None, batch_c_tensor=None, num=None):
         """Sample images from the generator.
         Images are returned as a 4D tensor of values between -1 and 1.
         Dimensions are (number, channels, height, width). Returns the tensor
@@ -370,7 +295,11 @@ class InfoGAN:
         random latent vectors.
         """
         num = self.batch_size if num is None else num
-        batch_latent_vec, batch_categorical_label, batch_c_tensor = self.create_gen_input(num)
+        random_input_gen = self.create_gen_input(num)
+        batch_latent_vec = random_input_gen[0] if batch_latent_vec is None else batch_latent_vec
+        batch_categorical_label = random_input_gen[1] if batch_categorical_label is None else batch_categorical_label
+        batch_c_tensor = random_input_gen[2] if batch_c_tensor is None else batch_c_tensor
+
         gen_input = torch.cat([batch_latent_vec, batch_categorical_label, batch_c_tensor], dim=1)
         with torch.no_grad():
             samples = self.generator(gen_input)
@@ -381,20 +310,25 @@ class InfoGAN:
         """Train the discriminator one step and return the losses."""
         self.optim_d.zero_grad()
 
-        pred_real = self.discriminator(real_samples, also_auxiliary_output=False)
+        pred_real = self.discriminator(real_samples)
         loss_real = self.binary_loss(pred_real, self.real_labels)
+
+        loss_real.backward()
 
         # generated samples
         batch_latent_vec, batch_categorical_label, batch_c_tensor = self.create_gen_input(current_batch_size)
         gen_input = torch.cat([batch_latent_vec, batch_categorical_label, batch_c_tensor], dim=1)
-        fake_samples = self.generator(gen_input)
+        with torch.no_grad():
+            fake_samples = self.generator(gen_input)
 
-        pred_fake = self.discriminator(fake_samples, also_auxiliary_output=False)
+        pred_fake = self.discriminator(fake_samples)
         loss_fake = self.binary_loss(pred_fake, self.fake_labels)
+
+        loss_fake.backward()
 
         # combine two losses
         loss = (loss_real + loss_fake)
-        loss.backward()
+        # loss.backward()
         self.optim_d.step()
 
         return loss.item()
@@ -417,41 +351,10 @@ class InfoGAN:
 
         return loss.item()
 
-    def train_step_infogan(self, current_batch_size, gen_loss):
-
-        self.optim_i.zero_grad()
-
-        # train info loss
-
-        batch_latent_vec, batch_categorical_label, batch_c_tensor = self.create_gen_input(current_batch_size)
-        gen_input = torch.cat([batch_latent_vec, batch_categorical_label, batch_c_tensor], dim=1)
-
-        generated = self.generator(gen_input)
-
-        classifications, categorical_pred, (mu_continuous, sigma_continuous) = self.discriminator(generated,
-                                                                                                  also_auxiliary_output=True)
-        # Categorical loss
-        cat_loss = self.categorical_loss(categorical_pred.float(), batch_categorical_label.float())
-
-        # Use Gaussian distributions to represent the output
-        dist = torch.distributions.Normal(loc=mu_continuous, scale=sigma_continuous)
-
-        # Losses (negative log probability density function as we want to maximize the probability density function)
-        c_losses = torch.mean(-dist.log_prob(batch_c_tensor))
-
-        # INFOGAN TOTAL LOSS
-        # Auxiliary function loss
-        q_loss = (1 * cat_loss + 0.1 * c_losses)
-
-        infogan_loss = gen_loss + q_loss
-        infogan_loss.backward()
-        self.optim_i.step()
-
-        return infogan_loss
-
     def train_step_gen_auxiliary(self, current_batch_size):
         """Train the generator one step and return the loss."""
 
+        self.optim_g.zero_grad()
 
         # GEN LOSS
 
@@ -460,22 +363,25 @@ class InfoGAN:
 
         generated = self.generator(gen_input)
 
-        classifications = self.discriminator(generated, also_auxiliary_output=False)
+        classifications = self.discriminator(generated)
 
         gen_img_loss = self.binary_loss(classifications, self.real_labels)
 
         # INFO LOSS
 
-        categorical_pred, mu_continuous, sigma_continuous = self.auxiliary(generated)
+        categorical_pred, mu_continuous, sigma_continuous = self.discriminator(generated, as_auxiliary=True)
 
         # Categorical loss
         cat_loss = self.categorical_loss(categorical_pred.float(), batch_categorical_label.float())
 
-        # Use Gaussian distributions to represent the output
-        dist = torch.distributions.Normal(loc=mu_continuous, scale=sigma_continuous)
+        # # Use Gaussian distributions to represent the output
+        # dist = torch.distributions.Normal(loc=mu_continuous, scale=sigma_continuous)
+        #
+        # # Losses (negative log probability density function as we want to maximize the probability density function)
+        # c_losses = torch.mean(-dist.log_prob(batch_c_tensor))
 
-        # Losses (negative log probability density function as we want to maximize the probability density function)
-        c_losses = torch.mean(-dist.log_prob(batch_c_tensor))
+        # Calculate loss for continuous latent code
+        c_losses = self.continuous_loss(batch_c_tensor, mu_continuous, sigma_continuous).mean(0)
 
         # INFOGAN TOTAL LOSS
         # Auxiliary function loss
@@ -483,16 +389,8 @@ class InfoGAN:
 
         infogan_loss = gen_img_loss + q_loss
 
-        self.optim_g.zero_grad()
         infogan_loss.backward()
-
-        self.optim_q.zero_grad()
-        q_loss = q_loss.detach()
-        q_loss.requires_grad = True
-        q_loss.backward()
-
         self.optim_g.step()
-        self.optim_q.step()
 
         return gen_img_loss, q_loss
 
@@ -519,6 +417,10 @@ class InfoGAN:
             self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
 
             loss_d_running += self.train_step_discriminator(real_samples, current_batch_size)
+
+            self.real_labels = torch.ones((current_batch_size, 1), device=self.device)
+
+            self.fake_labels = torch.zeros((current_batch_size, 1), device=self.device)
 
             #
             # loss_g = self.train_step_generator(current_batch_size*2)
@@ -553,10 +455,13 @@ if __name__ == '__main__':
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir)
 
+    resized_images_dir = '../dataset/best_artworks/resized/resized'
     image_size = 32
     batch_size = 64
-    epochs = 200
-    latent_dim = 100
+    epochs = 300
+    latent_dim = 128
+    lr_discriminator = 0.0001
+    lr_generator = 0.0002
 
     # Number of GPUs available. Use 0 for CPU mode.
     ngpu = 1
@@ -564,34 +469,87 @@ if __name__ == '__main__':
     # Decide which device we want to run on
     device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 
-    train = dset.CIFAR10(root='../dataset/cifar10',
-                         transform=transforms.Compose([
-                             transforms.Resize(image_size),
-                             transforms.CenterCrop(image_size),
-                             transforms.ToTensor(),
+    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
 
-                             # normalizes images in range [-1,1]
-                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    death_monet = 1926
+    impressionist_artists_dict = dict()
+    other_artists_to_consider_dict = dict()
+    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
+                                                                       metadata_csv['name'],
+                                                                       metadata_csv['years'],
+                                                                       metadata_csv['genre']):
 
-                         ]),
-                         train=True,
-                         download=True
-                         )
+        dob = artist_years.split(' ')[0]
+        if re.search(r'impressionism', artistic_movement.lower()):
 
-    test = dset.CIFAR10(root='../dataset/cifar10',
-                        transform=transforms.Compose([
-                            transforms.Resize(image_size),
-                            transforms.CenterCrop(image_size),
-                            transforms.ToTensor(),
+            impressionist_artists_dict[artist_name] = artist_id
+        elif int(dob) < death_monet:
+            other_artists_to_consider_dict[artist_name] = artist_id
 
-                            # normalizes images in range [-1,1]
-                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                        ]),
-                        train=False,
-                        download=True
-                        )
+    clean_dataset(resized_images_dir)
 
-    dataset = ConcatDataset([train, test])
+    train_impressionist = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_impressionist_augment1 = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.TrivialAugmentWide(),
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=impressionist_artists_dict
+    )
+
+    train_others = PaintingsFolder(
+        root=resized_images_dir,
+        transform=transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop((image_size, image_size)),
+            transforms.ToTensor(),
+
+            # normalizes images in range [-1,1]
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+
+        ]),
+        artists_dict=other_artists_to_consider_dict
+    )
+
+    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
+    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
+    subset_idx_list = []
+    current_artist_id = train_others.targets[0]
+    idx_paintings_current = []
+    for i in range(len(train_others.targets)):
+        if train_others.targets[i] != current_artist_id:
+            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
+            subset_idx_list.extend(idx_paintings_to_hold)
+
+            current_artist_id = train_others.targets[i]
+            idx_paintings_current.clear()
+        else:
+            indices_paintings = idx_paintings_current.append(i)
+
+    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
+
+    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
+    dataset = train_impressionist
 
     # Create the dataloader
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
@@ -599,21 +557,25 @@ if __name__ == '__main__':
 
     # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
     noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
-    gan = InfoGAN(latent_dim, noise_fn, dataloader, n_categorical=10, continuous_list=[(-1, 1)],
+
+    gan = InfoGAN(latent_dim, noise_fn, dataloader, n_categorical=13, continuous_list=[(-1, 1)],
                   batch_size=batch_size, device=device,
-                  lr_g=5e-4, lr_d=2e-4, lr_q=2e-4)
+                  lr_g=lr_generator, lr_d=lr_discriminator)
 
     print("Started training...")
+    static_noise = noise_fn(64)
+    start = time()
     for i in range(epochs):
         g_loss, d_loss, q_loss = gan.train_epoch()
 
+        print("Elapsed time = ", time() - start)
         print(
             "[Epoch %d/%d] [G loss: %f] [D loss: %f] [Q loss: %f]"
             % (i + 1, epochs, g_loss, d_loss, q_loss)
         )
 
         # save grid of 64 imgs for each epoch, to see generator progress
-        images = gan.generate_samples(num=64)
+        images = gan.generate_samples(static_noise)
         ims = vutils.make_grid(images, normalize=True)
         plt.axis("off")
         plt.title(f"Epoch {i + 1}")
