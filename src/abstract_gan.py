@@ -263,7 +263,7 @@ class Latent_GAN(GAN):
                 print(loss_name + "= " + str(loss_value), end=end)
 
             
-            if (i+1)%10 == 0 and save_model_checkpoints:
+            if (i+1)%100 == 0 and save_model_checkpoints:
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
