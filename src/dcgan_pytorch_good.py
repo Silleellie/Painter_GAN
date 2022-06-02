@@ -1,32 +1,11 @@
-import os
-import random
-import re
-import shutil
-
-import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
-from time import time
 import torch.utils.data
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
 import numpy as np
-from matplotlib import pyplot as plt
-from torch.utils.data import ConcatDataset
 
-from src.utils import PaintingsFolder
-from src.began_pytorch_good import clean_dataset
-
-
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
-
+from src.abstract_gan import Latent_GAN
+from src.utils import device
 
 class Generator(nn.Module):
     def __init__(self, latent_dim=100):
@@ -188,55 +167,34 @@ class Discriminator(nn.Module):
         return output_tensor
 
 
-class DCGAN:
-    def __init__(self, latent_dim, noise_fn, dataloader,
-                 batch_size=32, lr_d=0.0002, lr_g=0.0002, device: torch.device = 'cpu'):
+class DCGAN(Latent_GAN):
+    def __init__(self, latent_dim=100,
+                 noise_fn=None,lr_d=0.0002, lr_g=0.0002):
         """A very basic DCGAN class for generating MNIST digits
         Args:
-            generator: a Ganerator network
-            discriminator: A Discriminator network
+            latent_dim: dimension of the latent space
             noise_fn: function f(num: int) -> pytorch tensor, (latent vectors)
-            dataloader: a pytorch dataloader for loading images
-            batch_size: training batch size. Must match that of dataloader
-            device: cpu or CUDA
             lr_d: learning rate for the discriminator
             lr_g: learning rate for the generator
         """
-        self.generator = Generator(latent_dim).to(device)
-        self.generator.apply(weights_init)
 
-        self.discriminator = Discriminator().to(device)
-        self.discriminator.apply(weights_init)
+        def noise(x): return torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
 
-        self.noise_fn = noise_fn
-        self.dataloader = dataloader
-        self.batch_size = batch_size
-        self.device = device
+        noise_fn = noise if noise_fn is None else noise_fn
+
+        generator = Generator(latent_dim).to(device)
+        discriminator = Discriminator().to(device)
+
+        super().__init__(latent_dim, 
+                        generator=generator, 
+                        discriminator=discriminator, 
+                        optim_g=optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999)),
+                        optim_d=optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999)),
+                        noise_fn=noise_fn)
+
         self.criterion = nn.BCELoss()
-        self.optim_d = optim.Adam(self.discriminator.parameters(),
-                                  lr=lr_d, betas=(0.5, 0.999))
-        self.optim_g = optim.Adam(self.generator.parameters(),
-                                  lr=lr_g, betas=(0.5, 0.999))
         self.real_labels = None
         self.fake_labels = None
-
-    def generate_samples(self, latent_vec=None, num=None):
-        """Sample images from the generator.
-        Images are returned as a 4D tensor of values between -1 and 1.
-        Dimensions are (number, channels, height, width). Returns the tensor
-        on cpu.
-        Args:
-            latent_vec: A pytorch latent vector or None
-            num: The number of samples to generate if latent_vec is None
-        If latent_vec and num are None then use self.batch_size
-        random latent vectors.
-        """
-        num = self.batch_size if num is None else num
-        latent_vec = self.noise_fn(num) if latent_vec is None else latent_vec
-        with torch.no_grad():
-            samples = self.generator(latent_vec)
-        samples = samples.detach().cpu()  # move images to cpu
-        return samples
 
     def train_step_generator(self, current_batch_size):
         """Train the generator one step and return the loss."""
@@ -270,51 +228,36 @@ class DCGAN:
         self.optim_d.step()
         return loss_real.item(), loss_fake.item()
 
-    def train_epoch(self):
-        """Train both networks for one epoch and return the losses.
-        Args:
-            print_frequency (int): print stats every `print_frequency` steps.
-            max_steps (int): End epoch after `max_steps` steps, or set to 0
-                             to do the full epoch.
-        """
-        loss_g_running, loss_d_real_running, loss_d_fake_running = 0, 0, 0
-        for batch, (real_samples, _) in enumerate(self.dataloader):
+    def train_step(self, real_data):
+        current_batch_size = real_data.size(0)
 
-            current_batch_size = real_samples.size(0)
-            real_samples = real_samples.to(self.device)
+        # We build labels here so that if the last batch has less samples
+        # we don't have to drop it but we can still use it
+        # we perform smooth labels
+        self.real_labels = torch.ones((current_batch_size, 1), device=device)
+        self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=device)
 
-            # We build labels here so that if the last batch has less samples
-            # we don't have to drop it but we can still use it
-            # we perform smooth labels
-            self.real_labels = torch.ones((current_batch_size, 1), device=self.device)
-            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=self.device)
+        self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
+        self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=device)
 
-            self.fake_labels = torch.zeros((current_batch_size, 1), device=self.device)
-            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
+        loss_g = self.train_step_generator(current_batch_size)
 
-            loss_g_running += self.train_step_generator(current_batch_size)
+        half_batch_size = int(current_batch_size / 2)
 
-            half_batch_size = int(current_batch_size / 2)
+        random_idx = np.random.randint(0, current_batch_size, half_batch_size)
+        random_half_batch = real_data[random_idx]
 
-            random_idx = np.random.randint(0, current_batch_size, half_batch_size)
-            random_half_batch = real_samples[random_idx]
+        self.real_labels = torch.ones((half_batch_size, 1), device=device)
+        self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=device)
 
-            self.real_labels = torch.ones((half_batch_size, 1), device=self.device)
-            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=self.device)
+        self.fake_labels = torch.zeros((half_batch_size, 1), device=device)
+        self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=device)
 
-            self.fake_labels = torch.zeros((half_batch_size, 1), device=self.device)
-            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
+        ldr_, ldf_ = self.train_step_discriminator(random_half_batch, half_batch_size)
+        loss_d_real = ldr_
+        loss_d_fake = ldf_
 
-            ldr_, ldf_ = self.train_step_discriminator(random_half_batch, half_batch_size)
-            loss_d_real_running += ldr_
-            loss_d_fake_running += ldf_
-
-        n_batches = len(self.dataloader)
-        loss_g_running /= n_batches
-        loss_d_real_running /= n_batches
-        loss_d_fake_running /= n_batches
-
-        return loss_g_running, (loss_d_real_running, loss_d_fake_running)
+        return {"G_loss": loss_g, "D_loss_real": loss_d_real, "D_loss_fake": loss_d_fake}
 
 
 if __name__ == '__main__':
@@ -328,123 +271,5 @@ if __name__ == '__main__':
     G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
 
-    output_dir = '../output/dcgan_test_pytorch'
-    resized_images_dir = '../dataset/best_artworks/resized/resized'
-    image_size = 64  # for 128 just add conv layer in both generator and discriminator and adjust shape
-    batch_size = 128
-    epochs = 200
-    latent_dim = 100
-    # Number of GPUs available. Use 0 for CPU mode.
-    ngpu = 1
-
-    # Decide which device we want to run on
-    dev = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-
-    shutil.rmtree(output_dir, ignore_errors=True)
-    os.makedirs(output_dir)
-
-    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
-
-    death_monet = 1926
-    impressionist_artists_dict = dict()
-    other_artists_to_consider_dict = dict()
-    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
-                                                                       metadata_csv['name'],
-                                                                       metadata_csv['years'],
-                                                                       metadata_csv['genre']):
-
-        dob = artist_years.split(' ')[0]
-        if re.search(r'impressionism', artistic_movement.lower()):
-
-            impressionist_artists_dict[artist_name] = artist_id
-        elif int(dob) < death_monet:
-            other_artists_to_consider_dict[artist_name] = artist_id
-
-    clean_dataset(resized_images_dir)
-
-    train_impressionist = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_impressionist_augment1 = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.TrivialAugmentWide(),
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_others = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=other_artists_to_consider_dict
-    )
-
-    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
-    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
-    subset_idx_list = []
-    current_artist_id = train_others.targets[0]
-    idx_paintings_current = []
-    for i in range(len(train_others.targets)):
-        if train_others.targets[i] != current_artist_id:
-            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
-            subset_idx_list.extend(idx_paintings_to_hold)
-
-            current_artist_id = train_others.targets[i]
-            idx_paintings_current.clear()
-        else:
-            indices_paintings = idx_paintings_current.append(i)
-
-    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
-
-    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
-    dataset = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
-
-    # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=2)
-
-    # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
-    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=dev)
-    gan = DCGAN(latent_dim, noise_fn, dataloader, batch_size=batch_size, device=dev)
-
-    start = time()
-    for i in range(epochs):
-        print(f"Epoch {i + 1}; Elapsed time = {int(time() - start)}s")
-
-        g_loss, (d_loss_real, d_loss_fake) = gan.train_epoch()
-
-        print(f"G_loss -> {g_loss}, D_loss_real -> {d_loss_real}, D_loss_fake -> {d_loss_fake}\n")
-
-        # save grid of 64 imgs for each epoch, to see generator progress
-        images = gan.generate_samples(num=64)
-        ims = vutils.make_grid(images, normalize=True)
-        plt.axis("off")
-        plt.title(f"Epoch {i + 1}")
-        plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'{output_dir}/epoch{i + 1}.png')
+    gan = DCGAN()
+    gan.train(64, 64, 10, True, True)
