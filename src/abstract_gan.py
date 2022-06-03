@@ -18,7 +18,7 @@ import torchvision.datasets as datasets
 import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader, Subset
 
-from utils import clean_dataset, PaintingsFolder, device
+from src.utils import clean_dataset, PaintingsFolder, device
 
 class GAN(ABC):
 
