@@ -18,7 +18,7 @@ import torchvision.datasets as datasets
 import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader, Subset
 
-from src.utils import clean_dataset, PaintingsFolder, device
+from utils import clean_dataset, PaintingsFolder, device
 
 class GAN(ABC):
 
@@ -68,7 +68,9 @@ class GAN(ABC):
 
                 impressionist_artists_dict[artist_name] = artist_id
             elif int(dob) < death_monet:
-                other_artists_to_consider_dict[artist_name] = artist_id
+                if artist_name not in ['Vasiliy Kandinskiy', 'Raphael', 'Salvador Dali', 'Piet Mondrian', 'Peter Paul Rubens', 'Rembrandt', 
+            'Sandro Botticelli', 'Titian', 'William Turner']:
+                    other_artists_to_consider_dict[artist_name] = artist_id
 
         clean_dataset(dataset_path)
 
@@ -128,7 +130,6 @@ class GAN(ABC):
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
         plt.legend()
-        plt.xticks(np.arange(num_of_epochs), np.arange(1, num_of_epochs+1))
         plt.savefig(str("output/" + self.__class__.__name__ + "/losses_plot.png"), bbox_inches='tight')
     
     def plot_training_images(self, images, i):
@@ -184,7 +185,7 @@ class Latent_GAN(GAN):
         self.optim_g = optim_g
         self.optim_d = optim_d
 
-    def generate_samples(self, latent_vec=None, num=None):
+    def generate_samples(self, num=None, **args):
         """Sample images from the generator.
         Images are returned as a 4D tensor of values between -1 and 1.
         Dimensions are (number, channels, height, width). Returns the tensor
@@ -195,7 +196,14 @@ class Latent_GAN(GAN):
         If latent_vec and num are None then use self.batch_size
         random latent vectors.
         """
-        latent_vec = self.noise_fn(num) if latent_vec is None else latent_vec
+        try:
+            latent_vec = args["latent_vec"]
+        except KeyError:
+            if num is None:
+                raise ValueError("Must provide either a number of samples or a latent_vec in method generate_samples")
+            
+            latent_vec = self.noise_fn(num)
+        
         with torch.no_grad():
             samples = self.generator(latent_vec)
         samples = samples.detach().cpu()  # move images to cpu
@@ -213,6 +221,10 @@ class Latent_GAN(GAN):
 
         if for_inference:
             self.set_eval_mode()
+            del self.optim_g
+            self.optim_g = None
+            del self.optim_d
+            self.optim_d = None
         else:
             self.set_train_mode()
             self.optim_g = torch.load(path+"/generator_optimizer.pt")
@@ -226,7 +238,7 @@ class Latent_GAN(GAN):
         self.generator.eval()
         self.discriminator.eval()
     
-    def train(self, batch_size: int, image_size: int,  epochs: int, 
+    def train(self, batch_size: int, image_size: int, epochs: int, 
               save_model_checkpoints: bool = False, create_progress_images: bool = False,
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
 
@@ -268,7 +280,7 @@ class Latent_GAN(GAN):
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
             if (i+1)%10 == 0 and create_progress_images:
-                images = self.generate_samples(static_noise, batch_size)
+                images = self.generate_samples(batch_size, latent_vec=static_noise)
                 self.plot_training_images(images, i)
             
             print()
@@ -306,7 +318,8 @@ class AB_GAN(GAN):
     # them from memory (so the user doesn't need to create useless objects)
     def __init__(self, generator_a2b: nn.Module = None, generator_b2a: nn.Module = None,
                 discriminator_a: nn.Module = None, discriminator_b: nn.Module = None,
-                optim_g: torch.optim = None, optim_d_a: torch.optim = None, optim_d_b: torch.optim = None) -> None:
+                optim_g: torch.optim = None, optim_d: torch.optim = None,
+                lr_scheduler_class: type = None) -> None:
         super().__init__()
 
         self.generator_a2b = generator_a2b
@@ -320,8 +333,13 @@ class AB_GAN(GAN):
         self.discriminator_b.apply(self.weights_init)  
 
         self.optim_g = optim_g
-        self.optim_d_a = optim_d_a
-        self.optim_d_b = optim_d_b
+        self.optim_d = optim_d
+        print(optim_d)
+
+        self.lr_scheduler_class = lr_scheduler_class
+
+        self.lr_scheduler_g = None
+        self.lr_scheduler_d = None
 
     @classmethod
     def prepare_dataset_b(cls, image_size: int, normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
@@ -352,8 +370,10 @@ class AB_GAN(GAN):
         torch.save(self.discriminator_a, path+"/discriminator_a.pt")
         torch.save(self.discriminator_b, path+"/discriminator_b.pt")
         torch.save(self.optim_g, path+"/generators_optimizer.pt")
-        torch.save(self.optim_d_a, path+"/discriminator_a_optimizer.pt")
-        torch.save(self.optim_d_b, path+"/discriminator_b_optimizer.pt")
+        torch.save(self.optim_d, path+"/discriminators_optimizer.pt")
+        if self.lr_scheduler_g is not None:
+            torch.save(self.lr_scheduler_g, path+"/generator_scheduler.pt")
+            torch.save(self.lr_scheduler_d, path+"/discriminator_scheduler.pt")
     
     def load_model(self, path: str, for_inference: bool):
         self.generator_a2b = torch.load(path+"/generator_a2b.pt")
@@ -363,11 +383,22 @@ class AB_GAN(GAN):
 
         if for_inference:
             self.set_eval_mode()
+            del self.optim_g
+            self.optim_g = None
+            del self.optim_d
+            self.optim_d = None
+            if True:
+                del self.lr_scheduler_g
+                self.lr_scheduler_g = None
+                del self.lr_scheduler_d
+                self.lr_scheduler_d = None
         else:
             self.set_train_mode()
             self.optim_g = torch.load(path+"/generators_optimizer.pt")
-            self.optim_d_a = torch.load(path+"/discriminator_a.pt")
-            self.optim_d_b = torch.load(path+"/discriminator_b.pt")
+            self.optim_d = torch.load(path+"/discriminators_optimizer.pt")
+            if os.path.isfile(path+"/generator_scheduler.pt"):
+                self.lr_scheduler_g = torch.load(path+"/generator_scheduler.pt")
+                self.lr_scheduler_d = torch.load(path+"/discriminator_scheduler.pt")
     
     def set_train_mode(self):
         self.generator_a2b.train()
@@ -385,7 +416,12 @@ class AB_GAN(GAN):
               save_model_checkpoints: bool = False, create_progress_images: bool = False,
               dataset_b_path = '../dataset/photo_jpg',
               dataset_b_progress = '../dataset/photo_jpg_test',
-              normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
+              normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+              scheduler_params: dict = None):
+            
+        if scheduler_params != None:
+            self.lr_scheduler_g = self.lr_scheduler_class(self.optim_g, **scheduler_params)
+            self.lr_scheduler_d = self.lr_scheduler_class(self.optim_d, **scheduler_params)
 
         dataset_a = self.prepare_dataset(image_size, normalization_values)
         dataset_b = self.prepare_dataset_b(image_size, normalization_values, dataset_b_path)
@@ -468,6 +504,10 @@ class AB_GAN(GAN):
 
             for loss_name, loss_value in batch_losses.items():
                 running_losses[loss_name] += loss_value
+
+        if self.lr_scheduler_g is not None:
+            self.lr_scheduler_g.step()
+            self.lr_scheduler_d.step()
 
         for loss_name, loss_value in running_losses.items():
             running_losses[loss_name] = loss_value / n_batches
