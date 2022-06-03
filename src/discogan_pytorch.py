@@ -89,17 +89,17 @@ class DISCOGAN(AB_GAN):
         dis_a = Discriminator(3, init_features).to(device)
         dis_b = Discriminator(3, init_features).to(device)
         
-        optim_g = optim.Adam(itertools.chain(gen_a2b.parameters(), gen_b2a.parameters()), lr=lr_generator, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_d_a = optim.Adam(dis_a.parameters(), lr=lr_discriminator, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_d_b = optim.Adam(dis_b.parameters(), lr=lr_discriminator, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_g = optim.Adam(itertools.chain(gen_a2b.parameters(), gen_b2a.parameters()),
+                             lr=lr_generator, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_d = optim.Adam(itertools.chain(dis_a.parameters(), dis_b.parameters()),
+                             lr=lr_discriminator, betas=(0.5, 0.999), weight_decay=weight_decay)
 
         super().__init__(generator_a2b=gen_a2b,
                          generator_b2a=gen_b2a,
                          discriminator_a=dis_a,
                          discriminator_b=dis_b,
                          optim_g=optim_g,
-                         optim_d_a=optim_d_a,
-                         optim_d_b=optim_d_b)
+                         optim_d=optim_d)
 
         # how realistic a generated image is in domain B
         self.gan_criterion = gan_criterion
@@ -138,8 +138,7 @@ class DISCOGAN(AB_GAN):
 
         ### DISCRIMINATOR TRAINING ###
 
-        self.optim_d_a.zero_grad()
-        self.optim_d_b.zero_grad()
+        self.optim_d.zero_grad()
 
         pred_a = self.discriminator_a(real_data_a)
         pred_b = self.discriminator_b(real_data_b)
@@ -149,10 +148,8 @@ class DISCOGAN(AB_GAN):
         loss_d_b = self.gan_criterion(pred_b, torch.ones_like(pred_b).to(device)) * 0.5 + self.gan_criterion(pred_b_fake, torch.zeros_like(pred_b_fake).to(device)) * 0.5
         loss_d = loss_d_a + loss_d_b
 
-        loss_d_a.backward()
-        loss_d_b.backward()
-        self.optim_d_a.step()
-        self.optim_d_b.step()
+        loss_d.backward()
+        self.optim_d.step()
 
         loss_d = loss_d.item()
         loss_g = loss_g.item()
