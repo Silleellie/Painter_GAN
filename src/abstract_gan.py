@@ -332,7 +332,6 @@ class AB_GAN(GAN):
 
         self.optim_g = optim_g
         self.optim_d = optim_d
-        print(optim_d)
 
         self.lr_scheduler_class = lr_scheduler_class
 
