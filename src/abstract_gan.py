@@ -11,12 +11,13 @@ from tqdm import tqdm
 
 import matplotlib.pyplot as plt
 
+import wandb
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.utils as vutils
-from torch.utils.data import ConcatDataset, DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader
 
 from src.utils import clean_dataset, PaintingsFolder, device
 
@@ -116,20 +117,6 @@ class GAN(ABC):
 
         return dataset
     
-    def plot_losses(self, losses_dict):
-        plt.figure(figsize=(10,5))
-        plt.title("Losses obtained during training")
-        
-        num_of_epochs = len(list(losses_dict.values())[0])
-
-        for loss_name, loss_values in losses_dict.items():
-            plt.plot(loss_values, label=loss_name)
-        
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.savefig(str("output/" + self.__class__.__name__ + "/losses_plot.png"), bbox_inches='tight')
-    
     def plot_training_images(self, images, i):
         ims = vutils.make_grid(images, normalize=True)
         plt.axis("off")
@@ -163,8 +150,6 @@ class GAN(ABC):
 
 class Latent_GAN(GAN):
 
-    # generator, discriminator and optimizers are initialized to None in case the user wants to load
-    # them from memory (so the user doesn't need to create useless objects)
     def __init__(self, latent_dim: int,
                 generator: nn.Module = None, discriminator: nn.Module = None,
                 optim_g: torch.optim = None, optim_d: torch.optim = None,
@@ -237,34 +222,44 @@ class Latent_GAN(GAN):
         self.discriminator.eval()
     
     def train(self, batch_size: int, image_size: int, epochs: int, 
-              save_model_checkpoints: bool = False, create_progress_images: bool = False,
+              save_model_checkpoints: bool = False, create_progress_images: bool = False, plot_losses: bool = False,
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
+        
+        if plot_losses:
+            # replace project_name and entity_name when wandb team is ready
+            # and uncomment both this and run.finish()
+            """
+            run = wandb.init(project=project_name, entity=entity_name, 
+                             name=str(self.__class__.__name__).lower(), config={"epochs": epochs, "batch_size": batch_size})
+            """
+            wandb.define_metric("epoch")
 
         data = self.prepare_dataset(image_size, normalization_values)
         dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
 
         start = time()
 
-        losses_for_epoch = {}
-
         self.setup_directories(save_model_checkpoints)
 
         if create_progress_images:
             static_noise = self.noise_fn(batch_size)
+        
+        metrics_defined_in_wandb = False
 
         for i in range(epochs):
             print(f"Epoch {i+1}; Elapsed time = {int(time() - start)}s")
 
             losses = self.train_epoch(dataloader)
 
-            if len(losses_for_epoch) == 0:
-                for loss_name in losses.keys():
-                    losses_for_epoch[loss_name] = []
+            if plot_losses:
+                if not metrics_defined_in_wandb:
+                    for loss_name in losses.keys():
+                        wandb.define_metric(loss_name, step_metric="epoch")
+                    metrics_defined_in_wandb = True
 
             num_of_losses = len(losses)
 
             for j, (loss_name, loss_value) in enumerate(losses.items()):
-                losses_for_epoch[loss_name].append(loss_value)
                 if j != num_of_losses-1:
                     end = ', '
                 else:
@@ -272,18 +267,23 @@ class Latent_GAN(GAN):
                 
                 print(loss_name + "= " + str(loss_value), end=end)
 
-            
             if (i+1)%100 == 0 and save_model_checkpoints:
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
-            if (i+1)%10 == 0 and create_progress_images:
+            if ((i+1)%10 == 0 or (i == 0)) and create_progress_images:
                 images = self.generate_samples(batch_size, latent_vec=static_noise)
                 self.plot_training_images(images, i)
             
+            if plot_losses:
+                log_dict = {"epoch": i+1}
+                for loss_name, loss_value in losses.items():
+                    log_dict[loss_name] = loss_value
+                wandb.log(log_dict)
+            
             print()
-        
-        self.plot_losses(losses_for_epoch)
+            
+        # run.finish()
     
     def train_epoch(self, dataloader):
         """Train both networks for one epoch and return the losses."""
@@ -312,8 +312,6 @@ class Latent_GAN(GAN):
 
 class AB_GAN(GAN):
 
-    # generators, discriminators and optimizers are initialized to None in case the user wants to load
-    # them from memory (so the user doesn't need to create useless objects)
     def __init__(self, generator_a2b: nn.Module = None, generator_b2a: nn.Module = None,
                 discriminator_a: nn.Module = None, discriminator_b: nn.Module = None,
                 optim_g: torch.optim = None, optim_d: torch.optim = None,
@@ -410,11 +408,20 @@ class AB_GAN(GAN):
         self.discriminator_b.eval()
     
     def train(self, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, create_progress_images: bool = False,
+              save_model_checkpoints: bool = False, create_progress_images: bool = False, plot_losses: bool = False,
               dataset_b_path = '../dataset/photo_jpg',
               dataset_b_progress = '../dataset/photo_jpg_test',
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
               scheduler_params: dict = None):
+        
+        if plot_losses:
+            # replace project_name and entity_name when wandb team is ready
+            # and uncomment both this and run.finish()
+            """
+            run = wandb.init(project=project_name, entity=entity_name,
+                             name=str(self.__class__.__name__).lower(), config={"epochs": epochs, "batch_size": batch_size})
+            """
+            wandb.define_metric("epoch")
             
         if scheduler_params != None:
             self.lr_scheduler_g = self.lr_scheduler_class(self.optim_g, **scheduler_params)
@@ -422,14 +429,6 @@ class AB_GAN(GAN):
 
         dataset_a = self.prepare_dataset(image_size, normalization_values)
         dataset_b = self.prepare_dataset_b(image_size, normalization_values, dataset_b_path)
-
-        # cuts len of the datasets so that they have the same number of instances
-        if len(dataset_a) < len(dataset_b):
-            indices = torch.arange(len(dataset_a))
-            dataset_b = Subset(dataset_b, indices)
-        elif len(dataset_a) > len(dataset_b):
-            indices = torch.arange(len(dataset_b))
-            dataset_a = Subset(dataset_a, indices)
 
         dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
         dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True, num_workers=0)
@@ -447,23 +446,24 @@ class AB_GAN(GAN):
 
         start = time()
 
-        losses_for_epoch = {}
-
         self.setup_directories(save_model_checkpoints)
+
+        metrics_defined_in_wandb = False
 
         for i in range(epochs):
             print(f"Epoch {i+1}; Elapsed time = {int(time() - start)}s")
 
             losses = self.train_epoch(dataloader_a, dataloader_b)
 
-            if len(losses_for_epoch) == 0:
-                for loss_name in losses.keys():
-                    losses_for_epoch[loss_name] = []
+            if plot_losses:
+                if not metrics_defined_in_wandb:
+                    for loss_name in losses.keys():
+                        wandb.define_metric(loss_name, step_metric="epoch")
+                    metrics_defined_in_wandb = True
 
             num_of_losses = len(losses)
 
             for j, (loss_name, loss_value) in enumerate(losses.items()):
-                losses_for_epoch[loss_name].append(loss_value)
                 if j != num_of_losses-1:
                     end = ', '
                 else:
@@ -476,13 +476,19 @@ class AB_GAN(GAN):
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
-            if (i+1)%10 == 0 and create_progress_images:
+            if ((i+1)%10 == 0 or (i == 0)) and create_progress_images:
                 images = self.generate_images_b2a(test_set_list)
                 self.plot_training_images(images, i)
             
+            if plot_losses:
+                log_dict = {"epoch": i+1}
+                for loss_name, loss_value in losses.items():
+                    log_dict[loss_name] = loss_value
+                wandb.log(log_dict)
+            
             print()
-        
-        self.plot_losses(losses_for_epoch)
+            
+        # run.finish()
     
     def train_epoch(self, dataloader_a, dataloader_b):
 
