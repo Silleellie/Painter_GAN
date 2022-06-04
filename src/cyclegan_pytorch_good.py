@@ -3,8 +3,9 @@ import torch.nn as nn
 from torch import optim
 import torch.utils.data
 import itertools
-from src.abstract_gan import AB_GAN
-from src.utils import device
+
+from abstract_gan import AB_GAN
+from utils import device
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_features):
@@ -48,15 +49,15 @@ class Generator(nn.Module):
         self.model = nn.Sequential(*layers)
 
     @staticmethod
-    def _default_block_upsample(in_channels, out_channels, kernel_size = 4, stride = 2, padding = 1):
+    def _default_block_upsample(in_channels, out_channels, kernel_size = 3, stride = 2, padding = 1, output_padding=1):
         return [
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, bias=False),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding, bias=False),
             nn.InstanceNorm2d(out_channels),
             nn.ReLU(True)
         ]
 
     @staticmethod
-    def _default_block_downsample(in_channels, out_channels, kernel_size = 4, stride = 2, padding = 1):
+    def _default_block_downsample(in_channels, out_channels, kernel_size = 3, stride = 2, padding = 1):
         return [
                 nn.Conv2d(in_channels, out_channels, kernel_size = kernel_size, stride = stride, padding = padding),
                 nn.InstanceNorm2d(out_channels),
@@ -74,8 +75,8 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             Discriminator._default_block(features_d, features_d * 2, 4, 2, 1),
             Discriminator._default_block(features_d * 2, features_d * 4, 4, 2, 1),
-            nn.ZeroPad2d((1,0,1,0)),
-            nn.Conv2d(features_d * 4, 1, kernel_size=4, stride=1, padding=1, bias=False)
+            Discriminator._default_block(features_d * 4, features_d * 8, 4, 2, 1),
+            nn.Conv2d(features_d * 8, 1, kernel_size=4, stride=1, padding=1, bias=False)
         )
 
     @staticmethod
@@ -202,10 +203,10 @@ if __name__ == '__main__':
     https://arxiv.org/abs/1703.10593
     """
 
-    decay_epoch = 10
-    epochs = 20
+    decay_epoch = 100
+    epochs = 200
 
     def lr_decay_func(epoch): return 1 - max(0, epoch-decay_epoch)/(epochs-decay_epoch)
     
     gan = CYCLEGAN()
-    gan.train(64, 32, epochs, scheduler_params={'lr_lambda': lr_decay_func}, create_progress_images=True, save_model_checkpoints=True)
+    gan.train(1, 128, epochs, scheduler_params={'lr_lambda': lr_decay_func}, create_progress_images=True, save_model_checkpoints=True)
