@@ -4,8 +4,8 @@ from torch import optim
 import torch.utils.data
 import itertools
 
-from abstract_gan import AB_GAN
-from utils import device
+from src.abstract_gan import AB_GAN
+from src.utils import device
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_features):
