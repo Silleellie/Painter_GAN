@@ -2,21 +2,15 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 from torch import optim
-from abstract_gan import Latent_GAN
 
+from src.abstract_gan import Latent_GAN
 from src.utils import device
 
 """
-
 Structure of the code mirrors the implementation done for dcgan
 
 Code for both generator and critic is an adaptation of the code from this notebook:
 https://www.kaggle.com/code/errorinever/wgan-gp
-
-Ideally we should mirror the Generator and Discriminator done for our DCGAN but i had problems doing so
-After removing the sigmoid layer from the Discriminator and adapting the rest of the code, the images generated from the wgan 
-got progressively worse for each epoch when tested on cifar10 planes only with 100 epochs
-
 """
 
 class Generator(nn.Module):
@@ -184,5 +178,5 @@ class WGAN_GP(Latent_GAN):
 
 if __name__ == '__main__':
     gan = WGAN_GP()
-    gan.train(32, 32, 100, True, True)
+    gan.train(32, 32, 20, True, True)
 
