@@ -19,7 +19,7 @@ import torchvision.datasets as datasets
 import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
-from src.utils import clean_dataset, PaintingsFolder, device
+from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
 
 class GAN(ABC):
 
@@ -341,7 +341,12 @@ class AB_GAN(GAN):
                           dataset_path: str = "../dataset/photo_jpg",):
         transformers=cls.get_transformers(image_size=image_size, normalization_values=normalization_values)
 
-        return datasets.ImageFolder(root=dataset_path, transform=transformers)      
+        if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return datasets.ImageFolder(root=dataset_path, transform=transformers)
+        elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return ClasslessImageFolder(root=dataset_path, transform=transformers)
+        else:
+            raise FileNotFoundError("Specified dataset path " + dataset_path + " must contain only sub-directories or files")  
     
     def generate_images_a2b(self, images_vec=None):
         """

@@ -5,8 +5,10 @@ from pathlib import Path
 from copy import deepcopy
 from typing import Tuple, List, Dict, Callable, Optional
 import torch
+from PIL import Image
 
 from torchvision.datasets import ImageFolder
+from torch.utils.data import Dataset
 
 device = torch.device("cuda:0" if (torch.cuda.is_available()) else "cpu")
 
@@ -73,3 +75,23 @@ class PaintingsFolder(ImageFolder):
 
         del self.artists_dict
         return classes, class_to_idx
+
+
+# use this class if you have a directory directly containing images
+# and said images' classes are not relevant for the task
+# rather than sub-directories representing the classes of the images 
+class ClasslessImageFolder(Dataset):
+    def __init__(self, root, transform=None):
+        self.image_paths = [os.path.join(root, file_name) for file_name in os.listdir(root) if os.path.isfile(os.path.join(root, file_name))]
+        self.transform = transform
+        
+    def __getitem__(self, index):
+        image_path = self.image_paths[index]
+        x = Image.open(image_path)
+        y = 0
+        if self.transform is not None:
+            x = self.transform(x)
+        return x, y
+    
+    def __len__(self):
+        return len(self.image_paths)
