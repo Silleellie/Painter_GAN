@@ -19,7 +19,7 @@ import torchvision.datasets as datasets
 import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
-from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
+from utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
 
 class GAN(ABC):
 
@@ -119,10 +119,7 @@ class GAN(ABC):
     
     def plot_training_images(self, images, i):
         ims = vutils.make_grid(images, normalize=True)
-        plt.axis("off")
-        plt.title(f"Epoch")
-        plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(str("output/" + self.__class__.__name__ + "/epoch_num_" + str(i+1) + ".png"))
+        return wandb.Image(ims, caption=str("TRAINING IMAGES GENERATED AT EPOCH: " + str(i+1)))
     
     def setup_directories(self, save_model_checkpoints):
         shutil.rmtree(str("output/" + self.__class__.__name__), ignore_errors=True)
@@ -222,16 +219,14 @@ class Latent_GAN(GAN):
         self.discriminator.eval()
     
     def train(self, batch_size: int, image_size: int, epochs: int, 
-              save_model_checkpoints: bool = False, create_progress_images: bool = False, plot_losses: bool = False,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False,
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
         
-        if plot_losses:
-            # replace project_name and entity_name when wandb team is ready
-            # and uncomment both this and run.finish()
-            """
-            run = wandb.init(project=project_name, entity=entity_name, 
-                             name=str(self.__class__.__name__).lower(), config={"epochs": epochs, "batch_size": batch_size})
-            """
+        if wandb_plot:
+            run = wandb.init(project="Painter GAN", entity="painter_gan",
+                             name="{gan_name}_E:{num_epochs}_B:{batch_size}_I:{image_size}".format(
+                                gan_name=str(self.__class__.__name__).lower(), num_epochs=str(epochs), batch_size=str(batch_size), image_size=str(image_size)),
+                             config={"epochs": epochs, "batch_size": batch_size})
             wandb.define_metric("epoch")
 
         data = self.prepare_dataset(image_size, normalization_values)
@@ -241,7 +236,7 @@ class Latent_GAN(GAN):
 
         self.setup_directories(save_model_checkpoints)
 
-        if create_progress_images:
+        if wandb_plot:
             static_noise = self.noise_fn(batch_size)
         
         metrics_defined_in_wandb = False
@@ -251,7 +246,7 @@ class Latent_GAN(GAN):
 
             losses = self.train_epoch(dataloader)
 
-            if plot_losses:
+            if wandb_plot:
                 if not metrics_defined_in_wandb:
                     for loss_name in losses.keys():
                         wandb.define_metric(loss_name, step_metric="epoch")
@@ -271,19 +266,18 @@ class Latent_GAN(GAN):
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
-            if ((i+1)%10 == 0 or (i == 0)) and create_progress_images:
-                images = self.generate_samples(batch_size, latent_vec=static_noise)
-                self.plot_training_images(images, i)
-            
-            if plot_losses:
+            if wandb_plot:
                 log_dict = {"epoch": i+1}
                 for loss_name, loss_value in losses.items():
                     log_dict[loss_name] = loss_value
+                if ((i+1)%10 == 0 or (i == 0)):
+                    images = self.generate_samples(batch_size, latent_vec=static_noise)
+                    log_dict['training_images'] = self.plot_training_images(images, i)
                 wandb.log(log_dict)
             
             print()
             
-        # run.finish()
+        run.finish()
     
     def train_epoch(self, dataloader):
         """Train both networks for one epoch and return the losses."""
@@ -335,18 +329,22 @@ class AB_GAN(GAN):
 
         self.lr_scheduler_g = None
         self.lr_scheduler_d = None
+    
+    @classmethod
+    def load_dataset(cls, dataset_path, transformers):
+        if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return datasets.ImageFolder(root=dataset_path, transform=transformers)
+        elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return ClasslessImageFolder(root=dataset_path, transform=transformers)
+        else:
+            raise FileNotFoundError("Specified dataset path " + dataset_path + " must contain only sub-directories or files")
 
     @classmethod
     def prepare_dataset_b(cls, image_size: int, normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                           dataset_path: str = "../dataset/photo_jpg",):
         transformers=cls.get_transformers(image_size=image_size, normalization_values=normalization_values)
 
-        if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
-            return datasets.ImageFolder(root=dataset_path, transform=transformers)
-        elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
-            return ClasslessImageFolder(root=dataset_path, transform=transformers)
-        else:
-            raise FileNotFoundError("Specified dataset path " + dataset_path + " must contain only sub-directories or files")  
+        return cls.load_dataset(dataset_path, transformers) 
     
     def generate_images_a2b(self, images_vec=None):
         """
@@ -413,19 +411,17 @@ class AB_GAN(GAN):
         self.discriminator_b.eval()
     
     def train(self, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, create_progress_images: bool = False, plot_losses: bool = False,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False,
               dataset_b_path = '../dataset/photo_jpg',
               dataset_b_progress = '../dataset/photo_jpg_test',
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
               scheduler_params: dict = None):
         
-        if plot_losses:
-            # replace project_name and entity_name when wandb team is ready
-            # and uncomment both this and run.finish()
-            """
-            run = wandb.init(project=project_name, entity=entity_name,
-                             name=str(self.__class__.__name__).lower(), config={"epochs": epochs, "batch_size": batch_size})
-            """
+        if wandb_plot:
+            run = wandb.init(project="Painter GAN", entity="painter_gan",
+                             name="{gan_name}_E:{num_epochs}_B:{batch_size}_I:{image_size}".format(
+                                gan_name=str(self.__class__.__name__).lower(), num_epochs=str(epochs), batch_size=str(batch_size), image_size=str(image_size)),
+                             config={"epochs": epochs, "batch_size": batch_size})
             wandb.define_metric("epoch")
             
         if scheduler_params != None:
@@ -438,8 +434,8 @@ class AB_GAN(GAN):
         dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
         dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True, num_workers=0)
 
-        if create_progress_images:
-            test_set = datasets.ImageFolder(root=dataset_b_progress, transform=self.get_transformers(image_size, normalization_values))
+        if wandb_plot:
+            test_set = self.load_dataset(dataset_b_progress, self.get_transformers(image_size, normalization_values))
 
             test_set_list = []
             for i, (image, _) in enumerate(test_set):
@@ -460,7 +456,7 @@ class AB_GAN(GAN):
 
             losses = self.train_epoch(dataloader_a, dataloader_b)
 
-            if plot_losses:
+            if wandb_plot:
                 if not metrics_defined_in_wandb:
                     for loss_name in losses.keys():
                         wandb.define_metric(loss_name, step_metric="epoch")
@@ -476,24 +472,22 @@ class AB_GAN(GAN):
                 
                 print(loss_name + "= " + str(loss_value), end=end)
 
-            
+            if wandb_plot:
+                log_dict = {"epoch": i+1}
+                for loss_name, loss_value in losses.items():
+                    log_dict[loss_name] = loss_value
+                if ((i+1)%1 == 0 or (i == 0)):
+                    images = self.generate_images_b2a(test_set_list)
+                    log_dict['training_images'] = self.plot_training_images(images, i)
+                wandb.log(log_dict)
+
             if (i+1)%100 == 0 and save_model_checkpoints:
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
-            if ((i+1)%10 == 0 or (i == 0)) and create_progress_images:
-                images = self.generate_images_b2a(test_set_list)
-                self.plot_training_images(images, i)
-            
-            if plot_losses:
-                log_dict = {"epoch": i+1}
-                for loss_name, loss_value in losses.items():
-                    log_dict[loss_name] = loss_value
-                wandb.log(log_dict)
-            
             print()
             
-        # run.finish()
+        run.finish()
     
     def train_epoch(self, dataloader_a, dataloader_b):
 
