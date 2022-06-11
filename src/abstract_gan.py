@@ -19,7 +19,7 @@ import torchvision.datasets as datasets
 import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
-from utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
+from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
 
 class GAN(ABC):
 
@@ -476,7 +476,7 @@ class AB_GAN(GAN):
                 log_dict = {"epoch": i+1}
                 for loss_name, loss_value in losses.items():
                     log_dict[loss_name] = loss_value
-                if ((i+1)%1 == 0 or (i == 0)):
+                if ((i+1)%10 == 0 or (i == 0)):
                     images = self.generate_images_b2a(test_set_list)
                     log_dict['training_images'] = self.plot_training_images(images, i)
                 wandb.log(log_dict)
