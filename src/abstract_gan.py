@@ -9,8 +9,6 @@ from time import time
 from tqdm import tqdm
 from typing import List
 
-import matplotlib.pyplot as plt
-
 import wandb
 import torch
 import torch.nn as nn
@@ -555,14 +553,13 @@ class AB_GAN(GAN):
         for (real, _) in tqdm(real_data):
             real_images.append(real)
         real_images = torch.stack(real_images)
-        real_images = real_images[:64]
 
-        fake_images = []
+        test_images = []
         print("LOADING FAKE DATA")
-        for (fake, _) in tqdm(test_data):
-            fake_images.append(fake.to(device))
-        fake_images = torch.stack(fake_images)
-        fake_images = self.generate_images_b2a(fake_images)
+        for (test, _) in tqdm(test_data):
+            test_images.append(test.to(device))
+        test_images = torch.stack(test_images)
+        fake_images = self.generate_images_b2a(test_images)
 
         for metric in metrics_to_consider:
             if isinstance(metric, GANMetricFake):
