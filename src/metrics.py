@@ -1,0 +1,143 @@
+from abc import ABC, abstractmethod
+import numpy as np
+import torch
+
+from torchmetrics import Metric
+from torchmetrics.image.kid import KernelInceptionDistance
+from torchmetrics.image.inception import InceptionScore
+from torchmetrics.image.fid import FrechetInceptionDistance, NoTrainInceptionV3, _compute_fid
+from torchmetrics.utilities.data import dim_zero_cat
+from torch.nn.functional import cosine_similarity
+
+class MiFID(Metric):
+    def __init__(self, feature=2048, epsilon=1e-6, **args):
+        super().__init__(**args)
+        self.epsilon = epsilon
+
+        self.inception = NoTrainInceptionV3(name="inception-v3-compat", features_list=[str(feature)])
+        self.add_state("d", default=[], dist_reduce_fx=None)
+        self.add_state("real_features", [], dist_reduce_fx=None)
+        self.add_state("fake_features", [], dist_reduce_fx=None)
+
+    def update(self, images, real: bool):
+        features = self.inception(images)
+        self.orig_d_type = features.dtype
+
+        if real:
+            self.real_features.append(features)
+        else:
+            self.fake_features.append(features)
+    
+    def compute(self):
+        real_features = dim_zero_cat(self.real_features)
+        fake_features = dim_zero_cat(self.fake_features)
+
+        orig_dtype = real_features.dtype
+
+        real_features = real_features.double()
+        fake_features = fake_features.double()
+
+        n = real_features.shape[0]
+        m = fake_features.shape[0]
+        mean1 = real_features.mean(dim=0)
+        mean2 = fake_features.mean(dim=0)
+        diff1 = real_features - mean1
+        diff2 = fake_features - mean2
+        cov1 = 1.0 / (n - 1) * diff1.t().mm(diff1)
+        cov2 = 1.0 / (m - 1) * diff2.t().mm(diff2)
+
+        fid_value = _compute_fid(mean1, cov1, mean2, cov2).to(orig_dtype)
+
+        min_distances_vector = []
+
+        for fake_feature_vector in fake_features:
+            distances_vector = []
+            for real_feature_vector in real_features:
+                cos_distance = 1 - cosine_similarity(real_feature_vector, fake_feature_vector, dim=0)
+                distances_vector.append(cos_distance)
+            min_distances_vector.append(min(distances_vector))
+        
+        d = np.mean(min_distances_vector)
+        d = d if d < self.epsilon else 1
+
+        mifid = fid_value * (1 / d)
+
+        return mifid
+
+class GANMetric(ABC):
+
+    def __init__(self, torch_metric: Metric) -> None:
+        self.torch_metric = torch_metric
+    
+    @abstractmethod
+    def update(self, images):
+        raise NotImplementedError
+    
+    def compute(self):
+        return self.torch_metric.compute()
+    
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+    
+    def reset(self):
+        self.torch_metric.reset()
+
+
+class GANMetricFake(GANMetric):
+
+    def __init__(self, torch_metric: Metric) -> None:
+        super().__init__(torch_metric)
+    
+    def update(self, images):
+        if images.type() != torch.uint8:
+            self.torch_metric.update(images.type(torch.uint8))
+        else:
+            self.torch_metric.update(images)
+
+
+class GANMetricRealFake(GANMetric):
+
+    def __init__(self, torch_metric: Metric) -> None:
+        super().__init__(torch_metric)
+    
+    def update(self, images, real: bool):
+        if images.type() != torch.uint8:
+            self.torch_metric.update(images.type(torch.uint8), real=real)
+        else:
+            self.torch_metric.update(images, real=real)
+
+
+class KIDMetric(GANMetricRealFake):
+
+    def __init__(self, **args) -> None:
+        super().__init__(KernelInceptionDistance(**args))
+    
+    def __str__(self) -> str:
+        return "Kernel Inception Distance (KID)"
+
+
+class FIDMetric(GANMetricRealFake):
+
+    def __init__(self, **args) -> None:
+        super().__init__(FrechetInceptionDistance(**args))
+    
+    def __str__(self) -> str:
+        return "Frechet Inception Distance (FID)"
+
+class MIFIDMetric(GANMetricRealFake):
+
+    def __init__(self, **args) -> None:
+        super().__init__(MiFID(**args))
+    
+    def __str__(self) -> str:
+        return "Memorization-Informed Frechet Inception Distance (MIFID)"
+
+
+class ISMetric(GANMetricFake):
+
+    def __init__(self, **args) -> None:
+        super().__init__(InceptionScore(**args))
+    
+    def __str__(self) -> str:
+        return "Inception Score (IS)"
