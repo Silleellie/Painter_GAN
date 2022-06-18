@@ -4,8 +4,10 @@ from torch import optim
 import torch.utils.data
 import itertools
 
-from src.abstract_gan import AB_GAN
-from src.utils import device
+from abstract_gan import AB_GAN
+from metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
+from utils import device, ClasslessImageFolder
+from torchvision.datasets import ImageFolder
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_features):
@@ -203,10 +205,11 @@ if __name__ == '__main__':
     https://arxiv.org/abs/1703.10593
     """
 
-    decay_epoch = 100
-    epochs = 200
+    decay_epoch = 200
+    epochs = 100
 
     def lr_decay_func(epoch): return 1 - max(0, epoch-decay_epoch)/(epochs-decay_epoch)
     
     gan = CYCLEGAN()
-    gan.train(1, 128, epochs, scheduler_params={'lr_lambda': lr_decay_func}, create_progress_images=True, save_model_checkpoints=True)
+    gan.train(1, 128, epochs, scheduler_params={'lr_lambda': lr_decay_func}, wandb_plot=False, save_model_checkpoints=True)
+    print(gan.test(ImageFolder('../dataset/best_artworks/resized/resized', transform=gan.get_transformers(128)), ClasslessImageFolder('../dataset/photo_jpg_test/test', transform=gan.get_transformers(128)), metrics_to_consider=[ISMetric(), FIDMetric(), MIFIDMetric()]))
