@@ -4,10 +4,10 @@ import os
 
 import random
 import re
-import numpy as np
 import pandas as pd
 from time import time
 from tqdm import tqdm
+from typing import List
 
 import matplotlib.pyplot as plt
 
@@ -20,6 +20,7 @@ import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
 from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
+from src.metrics import Metric, GANMetricFake, GANMetricRealFake
 
 class GAN(ABC):
 
@@ -69,7 +70,9 @@ class GAN(ABC):
 
                 impressionist_artists_dict[artist_name] = artist_id
             elif int(dob) < death_monet:
-                other_artists_to_consider_dict[artist_name] = artist_id
+                if artist_name not in ['Vasiliy Kandinskiy', 'Raphael', 'Salvador Dali', 'Piet Mondrian', 'Peter Paul Rubens', 'Rembrandt', 
+            'Sandro Botticelli', 'Titian', 'William Turner']:
+                    other_artists_to_consider_dict[artist_name] = artist_id
 
         clean_dataset(dataset_path)
 
@@ -276,8 +279,9 @@ class Latent_GAN(GAN):
                 wandb.log(log_dict)
             
             print()
-            
-        run.finish()
+        
+        if wandb_plot:
+            run.finish()
     
     def train_epoch(self, dataloader):
         """Train both networks for one epoch and return the losses."""
@@ -303,6 +307,31 @@ class Latent_GAN(GAN):
     @abstractmethod
     def train_step(self, real_data):
         raise NotImplementedError
+    
+    def test(self, real_data, metrics_to_consider: List[Metric]):
+        real_images = []
+        print("STARTING TESTING")
+        print("LOADING REAL DATA")
+        for (real, _) in tqdm(real_data):
+            real_images.append(real)
+        real_images = torch.stack(real_images)
+
+        size = real_data.size(0)
+        fake_images = self.generate_samples(size)
+
+        for metric in metrics_to_consider:
+            if isinstance(metric, GANMetricFake):
+                metric.update(fake_images)
+            elif isinstance(metric, GANMetricRealFake):
+                metric.update(real_images, real=True)
+                metric.update(fake_images, real=False)
+        
+        results = {}
+        for metric in metrics_to_consider:
+            results[str(metric)] = metric.compute()
+            metric.reset()
+        
+        return results
 
 class AB_GAN(GAN):
 
@@ -486,8 +515,9 @@ class AB_GAN(GAN):
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
             print()
-            
-        run.finish()
+        
+        if wandb_plot:
+            run.finish()
     
     def train_epoch(self, dataloader_a, dataloader_b):
 
@@ -519,3 +549,33 @@ class AB_GAN(GAN):
     @abstractmethod
     def train_step(self, real_data_a, real_data_b):
         raise NotImplementedError
+    
+    def test(self, real_data, test_data, metrics_to_consider: List[Metric]):
+        real_images = []
+        print("STARTING TESTING")
+        print("LOADING REAL DATA")
+        for (real, _) in tqdm(real_data):
+            real_images.append(real)
+        real_images = torch.stack(real_images)
+        real_images = real_images[:64]
+
+        fake_images = []
+        print("LOADING FAKE DATA")
+        for (fake, _) in tqdm(test_data):
+            fake_images.append(fake.to(device))
+        fake_images = torch.stack(fake_images)
+        fake_images = self.generate_images_b2a(fake_images)
+
+        for metric in metrics_to_consider:
+            if isinstance(metric, GANMetricFake):
+                metric.update(fake_images)
+            elif isinstance(metric, GANMetricRealFake):
+                metric.update(real_images, real=True)
+                metric.update(fake_images, real=False)
+        
+        results = {}
+        for metric in metrics_to_consider:
+            results[str(metric)] = metric.compute()
+            metric.reset()
+        
+        return results
