@@ -9,6 +9,8 @@ from torchmetrics.image.fid import FrechetInceptionDistance, NoTrainInceptionV3,
 from torchmetrics.utilities.data import dim_zero_cat
 from torch.nn.functional import cosine_similarity
 
+# implementation of the MiFid metric based on the original implementation of the fid metric in the torchmetrics library
+# it expands the Fid implementation by adding the computations associated to the MiFid metric
 class MiFID(Metric):
     def __init__(self, feature=2048, epsilon=1e-6, **args):
         super().__init__(**args)
@@ -48,6 +50,10 @@ class MiFID(Metric):
 
         fid_value = _compute_fid(mean1, cov1, mean2, cov2).to(orig_dtype)
 
+        ## computes the memorization distance (key value for the MiFid metric)
+        ## finds the minimum cosine similarity between each generated feature vector and the real ones
+        ## also applies a threshold epsilon and this distance is returned only if it surpasses said threshold, otherwise equal to 1
+
         min_distances_vector = []
 
         for fake_feature_vector in fake_features:
@@ -84,6 +90,10 @@ class GANMetric(ABC):
         self.torch_metric.reset()
 
 
+## A distinction has been made between two categories of GAN metrics
+## - Those that work by only using the generated images [GANMetricFake] (Inception Score, for example)
+## - Those that work by using both the real images and the generated ones [GANMetricRealFake] (Frechet Inception Distance, for example)
+
 class GANMetricFake(GANMetric):
 
     def __init__(self, torch_metric: Metric) -> None:
@@ -107,6 +117,8 @@ class GANMetricRealFake(GANMetric):
         else:
             self.torch_metric.update(images, real=real)
 
+## Classes of the actual metrics follow
+## args in the init method is used to pass to the actual torch metric possible parameters
 
 class KIDMetric(GANMetricRealFake):
 

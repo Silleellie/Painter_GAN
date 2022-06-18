@@ -20,6 +20,8 @@ from torch.utils.data import ConcatDataset, DataLoader
 from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
 from src.metrics import Metric, GANMetricFake, GANMetricRealFake
 
+# Generic gan class containing all the main methods used by the possible gan implementations
+
 class GAN(ABC):
 
     def __init__(self) -> None:
@@ -120,12 +122,10 @@ class GAN(ABC):
         ims = vutils.make_grid(images, normalize=True)
         return wandb.Image(ims, caption=str("TRAINING IMAGES GENERATED AT EPOCH: " + str(i+1)))
     
-    def setup_directories(self, save_model_checkpoints):
+    def setup_checkpoint_directories(self):
         shutil.rmtree(str("output/" + self.__class__.__name__), ignore_errors=True)
         os.makedirs(str("output/" + self.__class__.__name__))
-
-        if save_model_checkpoints:
-            os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints"))
+        os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints"))
     
     @abstractmethod
     def save_model(self, path: str):
@@ -142,7 +142,10 @@ class GAN(ABC):
     @abstractmethod
     def set_eval_mode(self):
         raise NotImplementedError
-    
+
+## Distinction between two categories of GANs
+## - Those that generate images from a latent space [Latent_GAN] (Wgan_gp or Dcgan, for example)
+## - Those that generate images by using two domains (A - B) and applying their patterns to one another [AB_GAN] (Cycle or Disco Gan, for example)
 
 class Latent_GAN(GAN):
 
@@ -194,6 +197,7 @@ class Latent_GAN(GAN):
         torch.save(self.optim_g, path+"/generator_optimizer.pt")
         torch.save(self.optim_d, path+"/discriminator_optimizer.pt")
     
+    # for inference parameters sets the eval mode for both generator and discriminator
     def load_model(self, path: str, for_inference: bool):
         self.generator = torch.load(path+"/generator.pt")
         self.discriminator = torch.load(path+"/discriminator.pt")
@@ -221,20 +225,32 @@ class Latent_GAN(GAN):
               save_model_checkpoints: bool = False, wandb_plot: bool = False,
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
         
+        # save_model_checkpoints: if True, automatically saves the state of the GAN after 100 epochs
+        # wandb_plot: if True, sends the losses and a batch of images generated during training (this last step only each 10 epochs) to wandb
+        
         if wandb_plot:
             run = wandb.init(project="Painter GAN", entity="painter_gan",
                              name="{gan_name}_E:{num_epochs}_B:{batch_size}_I:{image_size}".format(
                                 gan_name=str(self.__class__.__name__).lower(), num_epochs=str(epochs), batch_size=str(batch_size), image_size=str(image_size)),
                              config={"epochs": epochs, "batch_size": batch_size})
             wandb.define_metric("epoch")
+        
+        ## Preparation Step
+
+        ## prepare training dataset and load it
 
         data = self.prepare_dataset(image_size, normalization_values)
         dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
 
         start = time()
 
-        self.setup_directories(save_model_checkpoints)
+        ## if checkpoints of the model will be saved, directories to store them are created
 
+        if save_model_checkpoints:
+            self.setup_checkpoint_directories()
+
+        ## if wandb_plot, a static noise will be created which will be used to generate the images during training 
+        ## (as to have the same starting point each time new images are created and sent to wandb)
         if wandb_plot:
             static_noise = self.noise_fn(batch_size)
         
@@ -246,6 +262,8 @@ class Latent_GAN(GAN):
             losses = self.train_epoch(dataloader)
 
             if wandb_plot:
+                # done at first for iteration when the metrics are still unknown (in the case of training they are losses mostly)
+                # it defines all the metrics that wandb will have to handle
                 if not metrics_defined_in_wandb:
                     for loss_name in losses.keys():
                         wandb.define_metric(loss_name, step_metric="epoch")
@@ -261,10 +279,14 @@ class Latent_GAN(GAN):
                 
                 print(loss_name + "= " + str(loss_value), end=end)
 
+            ## saves checkpoint after 100 iterations
+
             if (i+1)%100 == 0 and save_model_checkpoints:
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
+            ## sends losses at each iteration and the generated images each 10 iterations 
+
             if wandb_plot:
                 log_dict = {"epoch": i+1}
                 for loss_name, loss_value in losses.items():
@@ -284,6 +306,10 @@ class Latent_GAN(GAN):
         running_losses = {}
 
         n_batches = len(dataloader)
+
+        ## batch_losses = losses for single batch
+        ## running_losses = average losses for all the batches
+
         for (real_samples, _) in tqdm(dataloader, total=n_batches):
             real_samples = real_samples.to(device)
 
@@ -304,6 +330,7 @@ class Latent_GAN(GAN):
     def train_step(self, real_data):
         raise NotImplementedError
     
+    # TO-DO: when approaching testing in the future after all the models have been trained add simple wandb integration
     def test(self, real_data, metrics_to_consider: List[Metric]):
         real_images = []
         print("STARTING TESTING")
@@ -357,6 +384,9 @@ class AB_GAN(GAN):
     
     @classmethod
     def load_dataset(cls, dataset_path, transformers):
+        ## loads a dataset, first tries to load it with the default ImageFolder class of PyTorch (which requires a nested subdirectories structures)
+        ## then tries to use the ClasslessImageFolder (which only requires images in one main folder)
+        ## if both do not work, FileNotFoundError is raised
         if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
             return datasets.ImageFolder(root=dataset_path, transform=transformers)
         elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
@@ -442,16 +472,25 @@ class AB_GAN(GAN):
               normalization_values = ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
               scheduler_params: dict = None):
         
+        # save_model_checkpoints: if True, automatically saves the state of the GAN after 100 epochs
+        # wandb_plot: if True, sends the losses and a batch of images generated during training (this last step only each 10 epochs) to wandb
+        
         if wandb_plot:
             run = wandb.init(project="Painter GAN", entity="painter_gan",
                              name="{gan_name}_E:{num_epochs}_B:{batch_size}_I:{image_size}".format(
                                 gan_name=str(self.__class__.__name__).lower(), num_epochs=str(epochs), batch_size=str(batch_size), image_size=str(image_size)),
                              config={"epochs": epochs, "batch_size": batch_size})
             wandb.define_metric("epoch")
+        
+        ## Preparation Step
+
+        ## sets eventual scheduler parameters for both the generator and the discriminator optimizers
             
         if scheduler_params != None:
             self.lr_scheduler_g = self.lr_scheduler_class(self.optim_g, **scheduler_params)
             self.lr_scheduler_d = self.lr_scheduler_class(self.optim_d, **scheduler_params)
+
+        ## prepares both the dataset of the domain A and the dataset of the domain B
 
         dataset_a = self.prepare_dataset(image_size, normalization_values)
         dataset_b = self.prepare_dataset_b(image_size, normalization_values, dataset_b_path)
@@ -459,6 +498,11 @@ class AB_GAN(GAN):
         dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
         dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True, num_workers=0)
 
+        ## if checkpoints of the model will be saved, directories to store them are created
+        if save_model_checkpoints:
+            self.setup_checkpoint_directories()
+
+        ## if wandb_plot, prepares the images from domain B that will be used for generating images during training
         if wandb_plot:
             test_set = self.load_dataset(dataset_b_progress, self.get_transformers(image_size, normalization_values))
 
@@ -472,8 +516,6 @@ class AB_GAN(GAN):
 
         start = time()
 
-        self.setup_directories(save_model_checkpoints)
-
         metrics_defined_in_wandb = False
 
         for i in range(epochs):
@@ -482,6 +524,8 @@ class AB_GAN(GAN):
             losses = self.train_epoch(dataloader_a, dataloader_b)
 
             if wandb_plot:
+                # done at first for iteration when the metrics are still unknown (in the case of training they are losses mostly)
+                # it defines all the metrics that wandb will have to handle
                 if not metrics_defined_in_wandb:
                     for loss_name in losses.keys():
                         wandb.define_metric(loss_name, step_metric="epoch")
@@ -496,7 +540,13 @@ class AB_GAN(GAN):
                     end = '.'
                 
                 print(loss_name + "= " + str(loss_value), end=end)
-
+            
+            ## saves checkpoint after 100 iterations
+            if (i+1)%100 == 0 and save_model_checkpoints:
+                os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
+                self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
+            
+            ## sends losses at each iteration and the generated images each 10 iterations 
             if wandb_plot:
                 log_dict = {"epoch": i+1}
                 for loss_name, loss_value in losses.items():
@@ -505,10 +555,6 @@ class AB_GAN(GAN):
                     images = self.generate_images_b2a(test_set_list)
                     log_dict['training_images'] = self.plot_training_images(images, i)
                 wandb.log(log_dict)
-
-            if (i+1)%100 == 0 and save_model_checkpoints:
-                os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
-                self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/"+str(i+1)))
             
             print()
         
@@ -518,6 +564,9 @@ class AB_GAN(GAN):
     def train_epoch(self, dataloader_a, dataloader_b):
 
         running_losses = {}
+
+        ## batch_losses = losses for single batch
+        ## running_losses = average losses for all the batches
 
         n_batches = min(len(dataloader_a), len(dataloader_b))
         for (images_a, images_b) in tqdm(zip(dataloader_a, dataloader_b), total=n_batches):
