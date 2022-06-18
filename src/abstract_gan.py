@@ -70,9 +70,7 @@ class GAN(ABC):
 
                 impressionist_artists_dict[artist_name] = artist_id
             elif int(dob) < death_monet:
-                if artist_name not in ['Vasiliy Kandinskiy', 'Raphael', 'Salvador Dali', 'Piet Mondrian', 'Peter Paul Rubens', 'Rembrandt', 
-            'Sandro Botticelli', 'Titian', 'William Turner']:
-                    other_artists_to_consider_dict[artist_name] = artist_id
+                other_artists_to_consider_dict[artist_name] = artist_id
 
         clean_dataset(dataset_path)
 

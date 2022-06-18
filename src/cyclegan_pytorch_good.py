@@ -3,11 +3,11 @@ import torch.nn as nn
 from torch import optim
 import torch.utils.data
 import itertools
-
-from abstract_gan import AB_GAN
-from metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
-from utils import device, ClasslessImageFolder
 from torchvision.datasets import ImageFolder
+
+from src.abstract_gan import AB_GAN
+from src.metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
+from src.utils import device, ClasslessImageFolder
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_features):
@@ -205,8 +205,8 @@ if __name__ == '__main__':
     https://arxiv.org/abs/1703.10593
     """
 
-    decay_epoch = 200
-    epochs = 100
+    decay_epoch = 100
+    epochs = 200
 
     def lr_decay_func(epoch): return 1 - max(0, epoch-decay_epoch)/(epochs-decay_epoch)
     
