@@ -1,24 +1,13 @@
 import itertools
-import os
-import re
-import shutil
 
-import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
-from time import time
 import torch.utils.data
-import random
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
 import numpy as np
-from matplotlib import pyplot as plt
-from torch.utils.data import ConcatDataset
-
-from src.began_pytorch_good import clean_dataset
-from src.utils import PaintingsFolder
+from src.abstract_gan import LatentGAN
+from src.utils import device
 
 
 class NormalNLLLoss:
@@ -34,15 +23,6 @@ class NormalNLLLoss:
         nll = -(logli.sum(1).mean())
 
         return nll
-
-
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
 
 
 class Generator(nn.Module):
@@ -211,10 +191,10 @@ class Discriminator(nn.Module):
             return latent_cat, latent_continuous_mu, latent_continuous_sigma
 
 
-class InfoGAN:
+class InfoGAN(LatentGAN):
 
-    def __init__(self, latent_dim, noise_fn, dataloader, n_categorical, continuous_list,
-                 batch_size=32, lr_d=0.0004, lr_g=0.0004, device: torch.device ='cpu'):
+    def __init__(self, latent_dim, n_categorical, continuous_list,
+                 noise_fn = None, lr_d=0.0004, lr_g=0.0004):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -226,36 +206,33 @@ class InfoGAN:
             lr_d: learning rate for the discriminator
             lr_g: learning rate for the generator
         """
+        def noise(x): return torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
+
+        noise_fn = noise if noise_fn is None else noise_fn
+
+        generator = Generator(latent_dim, n_categorical, len(continuous_list)).to(device)
+        discriminator = Discriminator(n_categorical, len(continuous_list)).to(device)
+
+        super().__init__(latent_dim,
+                         generator=generator,
+                         discriminator=discriminator,
+                         optim_g=optim.Adam(itertools.chain(*[generator.parameters(),
+                                                              discriminator.auxiliary_block.parameters(),
+                                                              discriminator.auxiliary_block_cat.parameters(),
+                                                              discriminator.auxiliary_block_mu.parameters(),
+                                                              discriminator.auxiliary_block_sigma.parameters()]),
+                                                              lr=lr_g, betas=(0.5, 0.999)),
+                         optim_d=optim.Adam(itertools.chain(*[discriminator.shared_block.parameters(),
+                                                              discriminator.discriminator_block.parameters()]),
+                                                              lr=lr_d, betas=(0.5, 0.999)),
+                         noise_fn=noise_fn)
+
         self.n_categorical = n_categorical
         self.continuous_list = continuous_list
-
-        self.generator = Generator(latent_dim, self.n_categorical, len(continuous_list)).to(device)
-        self.generator.apply(weights_init)
-
-        self.discriminator = Discriminator(self.n_categorical, len(continuous_list)).to(device)
-        self.discriminator.apply(weights_init)
-
-        self.noise_fn = noise_fn
-        self.dataloader = dataloader
-        self.batch_size = batch_size
-        self.device = device
 
         self.binary_loss = nn.BCELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
         self.continuous_loss = NormalNLLLoss()
-
-        self.optim_d = optim.Adam(itertools.chain(*[self.discriminator.shared_block.parameters(),
-                                                    self.discriminator.discriminator_block.parameters()]),
-
-                                  lr=lr_d, betas=(0.5, 0.999))
-
-        self.optim_g = optim.Adam(itertools.chain(*[self.generator.parameters(),
-                                                    self.discriminator.auxiliary_block.parameters(),
-                                                    self.discriminator.auxiliary_block_cat.parameters(),
-                                                    self.discriminator.auxiliary_block_mu.parameters(),
-                                                    self.discriminator.auxiliary_block_sigma.parameters()]),
-
-                                  lr=lr_g, betas=(0.5, 0.999))
 
         self.real_labels = None
         self.fake_labels = None
@@ -267,7 +244,7 @@ class InfoGAN:
         if batch_categorical_label is None:
             # Create categorical latent code
             batch_categorical_label = torch.randint(low=0, high=self.n_categorical, size=(current_batch_size,))  # range [0, n_categorical)
-            batch_categorical_label = F.one_hot(batch_categorical_label, num_classes=self.n_categorical).to(self.device).view(-1, self.n_categorical)
+            batch_categorical_label = F.one_hot(batch_categorical_label, num_classes=self.n_categorical).to(device).view(-1, self.n_categorical)
 
         if batch_c_list is None:
             # Create list of continuous latent code
@@ -279,26 +256,38 @@ class InfoGAN:
                 c = (high_interval - low_interval) * torch.rand(current_batch_size, 1) + low_interval  # range [low_interval, high_interval)
                 batch_c_list.append(c)
 
-        batch_c_tensor = torch.cat(batch_c_list, dim=1).to(self.device)
+        batch_c_tensor = torch.cat(batch_c_list, dim=1).to(device)
 
         return batch_latent_vec, batch_categorical_label, batch_c_tensor
 
-    def generate_samples(self, batch_latent_vec=None, batch_categorical_label=None, batch_c_tensor=None, num=None):
-        """Sample images from the generator.
-        Images are returned as a 4D tensor of values between -1 and 1.
-        Dimensions are (number, channels, height, width). Returns the tensor
-        on cpu.
-        Args:
-            latent_vec: A pytorch latent vector or None
-            num: The number of samples to generate if latent_vec is None
-        If latent_vec and num are None then use self.batch_size
-        random latent vectors.
-        """
-        num = self.batch_size if num is None else num
-        random_input_gen = self.create_gen_input(num)
-        batch_latent_vec = random_input_gen[0] if batch_latent_vec is None else batch_latent_vec
-        batch_categorical_label = random_input_gen[1] if batch_categorical_label is None else batch_categorical_label
-        batch_c_tensor = random_input_gen[2] if batch_c_tensor is None else batch_c_tensor
+    def generate_samples(self, num=None, **args):
+
+        if num is not None:
+            random_input_gen = self.create_gen_input(num)
+
+        try:
+            batch_latent_vec = args["latent_vec"]
+        except KeyError:
+            if num is None:
+                raise ValueError("Must provide either a number of samples or \
+                                 a latent_vec, batch_categorical_label and batch_c_tensor in method generate_samples")
+            batch_latent_vec = random_input_gen[0]
+        
+        try:
+            batch_categorical_label = args["batch_categorical_label"]
+        except KeyError:
+            if num is None:
+                raise ValueError("Must provide either a number of samples or \
+                                 a latent_vec, batch_categorical_label and batch_c_tensor in method generate_samples")
+            batch_categorical_label = random_input_gen[1]
+        
+        try:
+            batch_c_tensor = args["batch_c_tensor"]
+        except KeyError:
+            if num is None:
+                raise ValueError("Must provide either a number of samples or \
+                                 a latent_vec, batch_categorical_label and batch_c_tensor in method generate_samples")
+            batch_c_tensor = random_input_gen[2]
 
         gen_input = torch.cat([batch_latent_vec, batch_categorical_label, batch_c_tensor], dim=1)
         with torch.no_grad():
@@ -394,50 +383,35 @@ class InfoGAN:
 
         return gen_img_loss, q_loss
 
-    def train_epoch(self):
-        """Train both networks for one epoch and return the losses.
-        Args:
-            print_frequency (int): print stats every `print_frequency` steps.
-            max_steps (int): End epoch after `max_steps` steps, or set to 0
-                             to do the full epoch.
-        """
-        loss_g_running, loss_d_running, loss_auxiliary_running = 0, 0, 0
-        for batch, (real_samples, _) in enumerate(self.dataloader):
+    def train_step(self, real_data):
+        current_batch_size = real_data.size(0)
 
-            current_batch_size = real_samples.size(0)
-            real_samples = real_samples.to(self.device)
+        # We build labels here so that if the last batch has less samples
+        # we don't have to drop it but we can still use it
+        # we perform smooth labels
+        self.real_labels = torch.ones((current_batch_size, 1), device=device)
+        self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=device)
 
-            # We build labels here so that if the last batch has less samples
-            # we don't have to drop it but we can still use it
-            # we perform smooth labels
-            self.real_labels = torch.ones((current_batch_size, 1), device=self.device)
-            self.real_labels += 0.05 * torch.rand(self.real_labels.size(), device=self.device)
+        self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
+        self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=device)
 
-            self.fake_labels = torch.zeros((current_batch_size, 1), device=self.device)
-            self.fake_labels += 0.05 * torch.rand(self.fake_labels.size(), device=self.device)
+        loss_d = self.train_step_discriminator(real_data, current_batch_size)
 
-            loss_d_running += self.train_step_discriminator(real_samples, current_batch_size)
+        self.real_labels = torch.ones((current_batch_size, 1), device=device)
 
-            self.real_labels = torch.ones((current_batch_size, 1), device=self.device)
+        self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
 
-            self.fake_labels = torch.zeros((current_batch_size, 1), device=self.device)
+        #
+        # loss_g = self.train_step_generator(current_batch_size*2)
+        #
+        # loss_info = self.train_step_infogan(current_batch_size*2, loss_g)
 
-            #
-            # loss_g = self.train_step_generator(current_batch_size*2)
-            #
-            # loss_info = self.train_step_infogan(current_batch_size*2, loss_g)
+        loss_g, loss_info = self.train_step_gen_auxiliary(current_batch_size)
 
-            loss_g, loss_info = self.train_step_gen_auxiliary(current_batch_size)
+        loss_g = loss_g.item()
+        loss_aux = loss_info.item()
 
-            loss_g_running += loss_g
-            loss_auxiliary_running += loss_info
-
-        n_batches = len(self.dataloader)
-        loss_g_running /= n_batches
-        loss_d_running /= n_batches
-        loss_auxiliary_running /= n_batches
-
-        return loss_g_running, loss_d_running, loss_auxiliary_running
+        return {"G_loss": loss_g, "Aux_loss": loss_aux, "D_loss": loss_d}
 
 
 if __name__ == '__main__':
@@ -450,134 +424,8 @@ if __name__ == '__main__':
     Epoch 100; Elapsed time = 1100s
     G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
-    output_dir = "../output/infogan_test_pytorch"
-
-    shutil.rmtree(output_dir, ignore_errors=True)
-    os.makedirs(output_dir)
-
-    resized_images_dir = '../dataset/best_artworks/resized/resized'
-    image_size = 32
-    batch_size = 64
-    epochs = 300
     latent_dim = 128
-    lr_discriminator = 0.0001
-    lr_generator = 0.0002
+    gan = InfoGAN(latent_dim, n_categorical=13, continuous_list=[(-1, 1)])
+    gan.train(64, 32, 10, True, True)
 
-    # Number of GPUs available. Use 0 for CPU mode.
-    ngpu = 1
-
-    # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-
-    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
-
-    death_monet = 1926
-    impressionist_artists_dict = dict()
-    other_artists_to_consider_dict = dict()
-    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
-                                                                       metadata_csv['name'],
-                                                                       metadata_csv['years'],
-                                                                       metadata_csv['genre']):
-
-        dob = artist_years.split(' ')[0]
-        if re.search(r'impressionism', artistic_movement.lower()):
-
-            impressionist_artists_dict[artist_name] = artist_id
-        elif int(dob) < death_monet:
-            other_artists_to_consider_dict[artist_name] = artist_id
-
-    clean_dataset(resized_images_dir)
-
-    train_impressionist = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_impressionist_augment1 = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.TrivialAugmentWide(),
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_others = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=other_artists_to_consider_dict
-    )
-
-    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
-    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
-    subset_idx_list = []
-    current_artist_id = train_others.targets[0]
-    idx_paintings_current = []
-    for i in range(len(train_others.targets)):
-        if train_others.targets[i] != current_artist_id:
-            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
-            subset_idx_list.extend(idx_paintings_to_hold)
-
-            current_artist_id = train_others.targets[i]
-            idx_paintings_current.clear()
-        else:
-            indices_paintings = idx_paintings_current.append(i)
-
-    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
-
-    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
-    dataset = train_impressionist
-
-    # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=2)
-
-    # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
-    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
-
-    gan = InfoGAN(latent_dim, noise_fn, dataloader, n_categorical=13, continuous_list=[(-1, 1)],
-                  batch_size=batch_size, device=device,
-                  lr_g=lr_generator, lr_d=lr_discriminator)
-
-    print("Started training...")
-    static_noise = noise_fn(64)
-    start = time()
-    for i in range(epochs):
-        g_loss, d_loss, q_loss = gan.train_epoch()
-
-        print("Elapsed time = ", time() - start)
-        print(
-            "[Epoch %d/%d] [G loss: %f] [D loss: %f] [Q loss: %f]"
-            % (i + 1, epochs, g_loss, d_loss, q_loss)
-        )
-
-        # save grid of 64 imgs for each epoch, to see generator progress
-        images = gan.generate_samples(static_noise)
-        ims = vutils.make_grid(images, normalize=True)
-        plt.axis("off")
-        plt.title(f"Epoch {i + 1}")
-        plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'{output_dir}/epoch{i + 1}.png')
+    
