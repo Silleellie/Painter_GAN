@@ -4,7 +4,7 @@ from torch import optim
 import torch.utils.data
 import numpy as np
 
-from src.abstract_gan import Latent_GAN
+from src.abstract_gan import LatentGAN
 from src.utils import device
 
 class Generator(nn.Module):
@@ -167,7 +167,7 @@ class Discriminator(nn.Module):
         return output_tensor
 
 
-class DCGAN(Latent_GAN):
+class DCGAN(LatentGAN):
     def __init__(self, latent_dim=100,
                  noise_fn=None,lr_d=0.0002, lr_g=0.0002):
         """A very basic DCGAN class for generating MNIST digits

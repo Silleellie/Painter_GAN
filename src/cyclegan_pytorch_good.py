@@ -5,7 +5,7 @@ import torch.utils.data
 import itertools
 from torchvision.datasets import ImageFolder
 
-from src.abstract_gan import AB_GAN
+from src.abstract_gan import ABGAN
 from src.metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
 from src.utils import device, ClasslessImageFolder
 
@@ -92,7 +92,7 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class CYCLEGAN(AB_GAN):
+class CYCLEGAN(ABGAN):
     def __init__(self, init_features: int = 64, 
                  lr_generator=2e-4, lr_discriminator=2e-4,
                  lambda_cycle=10.0, lambda_identity=5.0, num_res_blocks=6,

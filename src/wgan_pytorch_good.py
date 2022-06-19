@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.utils.data
 from torch import optim
 
-from src.abstract_gan import Latent_GAN
+from src.abstract_gan import LatentGAN
 from src.utils import device
 
 """
@@ -72,7 +72,7 @@ class Critic(nn.Module):
 
 
 
-class WGAN_GP(Latent_GAN):
+class WGAN_GP(LatentGAN):
     def __init__(self, latent_dim=100, init_features: int = 64,
                 lr_generator=0.0002, lr_discriminator=0.0002, noise_fn=None, 
                 n_repetitions=5, l=10):

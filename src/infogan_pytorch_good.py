@@ -6,7 +6,7 @@ from torch import optim
 import torch.nn.functional as F
 import torch.utils.data
 import numpy as np
-from src.abstract_gan import Latent_GAN
+from src.abstract_gan import LatentGAN
 from src.utils import device
 
 
@@ -191,7 +191,7 @@ class Discriminator(nn.Module):
             return latent_cat, latent_continuous_mu, latent_continuous_sigma
 
 
-class InfoGAN(Latent_GAN):
+class InfoGAN(LatentGAN):
 
     def __init__(self, latent_dim, n_categorical, continuous_list,
                  noise_fn = None, lr_d=0.0004, lr_g=0.0004):

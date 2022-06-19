@@ -358,7 +358,7 @@ if __name__ == '__main__':
     resized_images_dir = '../dataset/best_artworks/resized/resized'
     image_size = 32
     batch_size = 16
-    epochs = 20
+    epochs = 200
     latent_dim = 64
     num_filters = 64
     lr_discriminator = 0.0001

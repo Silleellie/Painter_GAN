@@ -4,7 +4,7 @@ from torch import optim
 import torch.utils.data
 import itertools
 
-from src.abstract_gan import AB_GAN
+from src.abstract_gan import ABGAN
 from src.utils import device
 
 class Generator(nn.Module):
@@ -78,7 +78,7 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class DISCOGAN(AB_GAN):
+class DISCOGAN(ABGAN):
     def __init__(self, init_features: int = 64,
                  lr_generator=0.0002, lr_discriminator=0.0002, weight_decay: int = 0.00001,
                  reconstruction_criterion=nn.MSELoss(), gan_criterion=nn.BCELoss()): 
