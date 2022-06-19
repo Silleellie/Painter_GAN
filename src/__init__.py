@@ -1,0 +1,1 @@
+from stylegan3.stylegan3_pytorch_good import StyleGAN3
