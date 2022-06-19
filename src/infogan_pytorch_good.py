@@ -43,40 +43,40 @@ class Generator(nn.Module):
     def _init_modules(self):
         """Initialize the modules."""
         # Project the input
-        self.linear1 = nn.Linear(self.initial_dimension, 448*2*2)
+        self.linear1 = nn.Linear(self.initial_dimension, 512 * 4 * 4)
         self.relu = nn.ReLU()
-        self.bn1d0 = nn.BatchNorm1d(448*2*2)
+        self.bn1d0 = nn.BatchNorm1d(512 * 4 * 4)
 
         # Convolutions
         self.conv1 = nn.ConvTranspose2d(
-                in_channels=448,
-                out_channels=256,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+            in_channels=512,
+            out_channels=256,
+            kernel_size=4,
+            stride=2,
+            padding=1)
         self.bn2d1 = nn.BatchNorm2d(256)
 
         # Convolutions
         self.conv2 = nn.ConvTranspose2d(
-                in_channels=256,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+            in_channels=256,
+            out_channels=128,
+            kernel_size=4,
+            stride=2,
+            padding=1)
 
         self.conv3 = nn.ConvTranspose2d(
-                in_channels=128,
-                out_channels=64,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+            in_channels=128,
+            out_channels=64,
+            kernel_size=4,
+            stride=2,
+            padding=1)
 
         self.conv4 = nn.ConvTranspose2d(
-                in_channels=64,
-                out_channels=3,
-                kernel_size=4,
-                stride=2,
-                padding=1)
+            in_channels=64,
+            out_channels=3,
+            kernel_size=4,
+            stride=2,
+            padding=1)
 
         self.tanh = nn.Tanh()
 
@@ -88,7 +88,7 @@ class Generator(nn.Module):
         intermediate = self.bn1d0(intermediate)
 
         # reshape
-        intermediate = intermediate.view((input_tensor.shape[0], 448, 2, 2))
+        intermediate = intermediate.view((input_tensor.shape[0], 512, 4, 4))
 
         intermediate = self.conv1(intermediate)
         intermediate = self.relu(intermediate)
@@ -126,40 +126,40 @@ class Discriminator(nn.Module):
         # BLOCK SHARED BY DISCRIMINATOR AND AUXILIARY
         self.shared_block = nn.Sequential(
             nn.Conv2d(
-                    in_channels=3,
-                    out_channels=64,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1),
+                in_channels=3,
+                out_channels=64,
+                kernel_size=4,
+                stride=2,
+                padding=1),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
             nn.Conv2d(
-                    in_channels=64,
-                    out_channels=128,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1),
+                in_channels=64,
+                out_channels=128,
+                kernel_size=4,
+                stride=2,
+                padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
 
             nn.Conv2d(
-                    in_channels=128,
-                    out_channels=256,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1),
+                in_channels=128,
+                out_channels=256,
+                kernel_size=4,
+                stride=2,
+                padding=1),
             nn.BatchNorm2d(256),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
         )
 
         # DISCRIMINATOR BLOCK
         self.discriminator_block = nn.Sequential(
-            nn.Linear(256*4*4, 1),
+            nn.Linear(256 * 8 * 8, 1),
             nn.Sigmoid()
         )
 
         # AUXILIARY BLOCK
         self.auxiliary_block = nn.Sequential(
-            nn.Linear(256*4*4, 128),
+            nn.Linear(256 * 8 * 8, 128),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(negative_slope=0.1, inplace=True)
         )
@@ -175,7 +175,7 @@ class Discriminator(nn.Module):
         """Forward pass; map samples to confidence they are real [0, 1]."""
         intermediate = self.shared_block(input_tensor)
 
-        intermediate = intermediate.view((input_tensor.shape[0], 256*4*4))
+        intermediate = intermediate.view((input_tensor.shape[0], 256 * 8 * 8))
 
         if as_auxiliary is False:
             discriminator_output = self.discriminator_block(intermediate)
@@ -194,7 +194,7 @@ class Discriminator(nn.Module):
 class InfoGAN(LatentGAN):
 
     def __init__(self, latent_dim, n_categorical, continuous_list,
-                 noise_fn = None, lr_d=0.0004, lr_g=0.0004):
+                 noise_fn=None, lr_d=0.0004, lr_g=0.0004):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -206,6 +206,7 @@ class InfoGAN(LatentGAN):
             lr_d: learning rate for the discriminator
             lr_g: learning rate for the generator
         """
+
         def noise(x): return torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
 
         noise_fn = noise if noise_fn is None else noise_fn
@@ -221,10 +222,11 @@ class InfoGAN(LatentGAN):
                                                               discriminator.auxiliary_block_cat.parameters(),
                                                               discriminator.auxiliary_block_mu.parameters(),
                                                               discriminator.auxiliary_block_sigma.parameters()]),
-                                                              lr=lr_g, betas=(0.5, 0.999)),
+                                            lr=lr_g, betas=(0.5, 0.999), weight_decay=0.1),
+
                          optim_d=optim.Adam(itertools.chain(*[discriminator.shared_block.parameters(),
                                                               discriminator.discriminator_block.parameters()]),
-                                                              lr=lr_d, betas=(0.5, 0.999)),
+                                            lr=lr_d, betas=(0.5, 0.999), weight_decay=0.1),
                          noise_fn=noise_fn)
 
         self.n_categorical = n_categorical
@@ -243,8 +245,10 @@ class InfoGAN(LatentGAN):
 
         if batch_categorical_label is None:
             # Create categorical latent code
-            batch_categorical_label = torch.randint(low=0, high=self.n_categorical, size=(current_batch_size,))  # range [0, n_categorical)
-            batch_categorical_label = F.one_hot(batch_categorical_label, num_classes=self.n_categorical).to(device).view(-1, self.n_categorical)
+            batch_categorical_label = torch.randint(low=0, high=self.n_categorical,
+                                                    size=(current_batch_size,))  # range [0, n_categorical)
+            batch_categorical_label = F.one_hot(batch_categorical_label, num_classes=self.n_categorical).to(
+                device).view(-1, self.n_categorical)
 
         if batch_c_list is None:
             # Create list of continuous latent code
@@ -253,7 +257,8 @@ class InfoGAN(LatentGAN):
                 low_interval = c_tuple[0]
                 high_interval = c_tuple[1]
 
-                c = (high_interval - low_interval) * torch.rand(current_batch_size, 1) + low_interval  # range [low_interval, high_interval)
+                c = (high_interval - low_interval) * torch.rand(current_batch_size,
+                                                                1) + low_interval  # range [low_interval, high_interval)
                 batch_c_list.append(c)
 
         batch_c_tensor = torch.cat(batch_c_list, dim=1).to(device)
@@ -272,7 +277,7 @@ class InfoGAN(LatentGAN):
                 raise ValueError("Must provide either a number of samples or \
                                  a latent_vec, batch_categorical_label and batch_c_tensor in method generate_samples")
             batch_latent_vec = random_input_gen[0]
-        
+
         try:
             batch_categorical_label = args["batch_categorical_label"]
         except KeyError:
@@ -280,7 +285,7 @@ class InfoGAN(LatentGAN):
                 raise ValueError("Must provide either a number of samples or \
                                  a latent_vec, batch_categorical_label and batch_c_tensor in method generate_samples")
             batch_categorical_label = random_input_gen[1]
-        
+
         try:
             batch_c_tensor = args["batch_c_tensor"]
         except KeyError:
@@ -319,24 +324,6 @@ class InfoGAN(LatentGAN):
         loss = (loss_real + loss_fake)
         # loss.backward()
         self.optim_d.step()
-
-        return loss.item()
-
-    def train_step_generator(self, current_batch_size):
-        """Train the generator one step and return the loss."""
-
-        self.optim_g.zero_grad()
-
-        # generated samples
-        batch_latent_vec, batch_categorical_label, batch_c_tensor = self.create_gen_input(current_batch_size)
-        gen_input = torch.cat([batch_latent_vec, batch_categorical_label, batch_c_tensor], dim=1)
-
-        generated = self.generator(gen_input)
-        classifications = self.discriminator(generated)
-
-        loss = self.binary_loss(classifications, self.real_labels)
-        loss.backward()
-        self.optim_g.step()
 
         return loss.item()
 
@@ -397,14 +384,9 @@ class InfoGAN(LatentGAN):
 
         loss_d = self.train_step_discriminator(real_data, current_batch_size)
 
+        # make fixed labels easier for generator
         self.real_labels = torch.ones((current_batch_size, 1), device=device)
-
         self.fake_labels = torch.zeros((current_batch_size, 1), device=device)
-
-        #
-        # loss_g = self.train_step_generator(current_batch_size*2)
-        #
-        # loss_info = self.train_step_infogan(current_batch_size*2, loss_g)
 
         loss_g, loss_info = self.train_step_gen_auxiliary(current_batch_size)
 
@@ -425,7 +407,9 @@ if __name__ == '__main__':
     G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
     latent_dim = 128
-    gan = InfoGAN(latent_dim, n_categorical=13, continuous_list=[(-1, 1)])
-    gan.train(64, 32, 10, True, True)
-
-    
+    gan = InfoGAN(latent_dim, n_categorical=49, continuous_list=[(-1, 1), (-1, 1)], lr_g=0.001, lr_d=0.0004)
+    gan.train(batch_size=64,
+              image_size=64,
+              epochs=4,
+              save_model_checkpoints=True,
+              wandb_plot=False)
