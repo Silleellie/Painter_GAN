@@ -1,7 +1,8 @@
 import os
 
 
-stylegan3_repo = './stylegan3_repo'
+current_path = os.path.realpath(__file__)
+stylegan3_repo = os.path.join(current_path, 'stylegan3_repo')
 
 
 class StyleGAN3:
