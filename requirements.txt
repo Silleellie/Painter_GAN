@@ -7,3 +7,4 @@ tqdm==4.62.3
 Pillow~=9.0.1
 torchmetrics~=0.9.1
 wandb~=0.12.17
+gdown~=4.4.0
