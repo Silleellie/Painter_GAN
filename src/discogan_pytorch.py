@@ -12,19 +12,15 @@ class Generator(nn.Module):
         super().__init__()
 
         self.downsample = nn.Sequential(
-            nn.Conv2d(channels_img, features_gen, 4, 1, 0, bias=False),
+            nn.Conv2d(channels_img, features_gen, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2 , inplace=True),
             Generator._default_block_downsample(features_gen, features_gen * 2, 4, 2, 1),
             Generator._default_block_downsample(features_gen * 2, features_gen * 4, 4, 2, 1),
-            Generator._default_block_downsample(features_gen * 4, features_gen * 4, 4, 2, 1),
-            Generator._default_block_downsample(features_gen * 4, features_gen * 4, 4, 2, 1),
-            Generator._default_block_downsample(features_gen * 4, features_gen * 4, 4, 2, 1),
+            Generator._default_block_downsample(features_gen * 4, features_gen * 8, 4, 2, 1),
         )
 
         self.upsample = nn.Sequential(
-            Generator._default_block_upsample(features_gen * 4, features_gen * 4, 4, 1, 1),
-            Generator._default_block_upsample(features_gen * 4, features_gen * 4, 4, 2, 1),
-            Generator._default_block_upsample(features_gen * 4, features_gen * 4, 4, 2, 1),
+            Generator._default_block_upsample(features_gen * 8, features_gen * 4, 4, 2, 1),
             Generator._default_block_upsample(features_gen * 4, features_gen * 2, 4, 2, 1),
             Generator._default_block_upsample(features_gen * 2, features_gen, 4, 2, 1),
             nn.ConvTranspose2d(features_gen, 3, kernel_size=4, stride=2, padding=1),
@@ -61,9 +57,8 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             Discriminator._default_block(features_d, features_d * 2, 4, 2, 1),
             Discriminator._default_block(features_d * 2, features_d * 4, 4, 2, 1),
-            Discriminator._default_block(features_d * 4, features_d * 4, 4, 2, 1),
-            Discriminator._default_block(features_d * 4, features_d * 4, 4, 2, 1),
-            nn.Conv2d(features_d * 4, 1, kernel_size=4, stride=1, padding=0, bias=False),
+            Discriminator._default_block(features_d * 4, features_d * 8, 4, 2, 1),
+            nn.Conv2d(features_d * 8, 1, kernel_size=4, stride=1, padding=0, bias=False),
             nn.Sigmoid()
         )
 
@@ -158,5 +153,5 @@ class DISCOGAN(ABGAN):
 
 if __name__ == '__main__':
     gan = DISCOGAN()
-    gan.train(16, 128, 10, True, True)
+    gan.train_with_default_dataset(1, 128, 10, False, False)
             
