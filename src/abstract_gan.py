@@ -54,6 +54,20 @@ class GAN(ABC):
                                        transforms.Normalize(normalization_values[0], normalization_values[1])])
 
     @classmethod
+    def load_dataset(cls, dataset_path, transformers):
+        # loads a dataset, first tries to load it with the default ImageFolder class of PyTorch (which requires
+        # a nested subdirectories structures)
+        # then tries to use the ClasslessImageFolder (which only requires images in one main folder)
+        # if both do not work, FileNotFoundError is raised
+        if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return datasets.ImageFolder(root=dataset_path, transform=transformers)
+        elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
+            return ClasslessImageFolder(root=dataset_path, transform=transformers)
+        else:
+            raise FileNotFoundError(
+                "Specified dataset path " + dataset_path + " must contain only sub-directories or files")
+
+    @classmethod
     def prepare_dataset(cls, image_size: int, normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
 
         dataset_path = '../dataset/best_artworks/resized/resized'
@@ -227,10 +241,32 @@ class LatentGAN(GAN):
     def set_eval_mode(self):
         self.generator.eval()
         self.discriminator.eval()
-
-    def train(self, batch_size: int, image_size: int, epochs: int,
+    
+    def train_with_default_dataset(self, batch_size: int, image_size: int, epochs: int,
               save_model_checkpoints: bool = False, wandb_plot: bool = False,
               normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
+
+        # prepare training dataset and load it
+
+        data = self.prepare_dataset(image_size, normalization_values)
+        dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
+
+        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot)
+    
+    def train_with_custom_dataset(self, dataset_path: str, batch_size: int, image_size: int, epochs: int,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False,
+              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False):
+
+        # prepare training dataset and load it
+        
+        data = self.load_dataset(dataset_path, self.get_transformers(image_size, normalization_values, data_augmentation))
+        dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
+
+        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot)
+        
+
+    def train(self, dataloader: DataLoader, batch_size: int, image_size: int, epochs: int,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False):
 
         # save_model_checkpoints: if True, automatically saves the state of the GAN after 100 epochs
         # wandb_plot: if True, sends the losses and a batch of images generated during training (this last step
@@ -245,11 +281,6 @@ class LatentGAN(GAN):
             wandb.define_metric("epoch")
 
         # Preparation Step
-
-        # prepare training dataset and load it
-
-        data = self.prepare_dataset(image_size, normalization_values)
-        dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
 
         start = time()
 
@@ -394,20 +425,6 @@ class ABGAN(GAN):
         self.lr_scheduler_d = None
 
     @classmethod
-    def load_dataset(cls, dataset_path, transformers):
-        # loads a dataset, first tries to load it with the default ImageFolder class of PyTorch (which requires
-        # a nested subdirectories structures)
-        # then tries to use the ClasslessImageFolder (which only requires images in one main folder)
-        # if both do not work, FileNotFoundError is raised
-        if all([os.path.isdir(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
-            return datasets.ImageFolder(root=dataset_path, transform=transformers)
-        elif all([os.path.isfile(os.path.join(dataset_path, name)) for name in os.listdir(dataset_path)]):
-            return ClasslessImageFolder(root=dataset_path, transform=transformers)
-        else:
-            raise FileNotFoundError(
-                "Specified dataset path " + dataset_path + " must contain only sub-directories or files")
-
-    @classmethod
     def prepare_dataset_b(cls, image_size: int, normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                           dataset_path: str = "../dataset/photo_jpg", ):
         transformers = cls.get_transformers(image_size=image_size, normalization_values=normalization_values)
@@ -477,8 +494,34 @@ class ABGAN(GAN):
         self.generator_b2a.eval()
         self.discriminator_a.eval()
         self.discriminator_b.eval()
+    
+    def train_with_default_dataset(self, batch_size: int, image_size: int, epochs: int,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False,
+              dataset_b_path='../dataset/photo_jpg',
+              dataset_b_progress='../dataset/photo_jpg_test',
+              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+              scheduler_params: dict = None):
 
-    def train(self, batch_size: int, image_size: int, epochs: int,
+        dataset_a = self.prepare_dataset(image_size, normalization_values)
+        dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
+        
+        self.train(dataloader_a, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot, 
+                   dataset_b_path, dataset_b_progress, normalization_values, scheduler_params)
+    
+    def train_with_custom_dataset(self, dataset_path: str, batch_size: int, image_size: int, epochs: int,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False,
+              dataset_b_path='../dataset/photo_jpg',
+              dataset_b_progress='../dataset/photo_jpg_test',
+              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False,
+              scheduler_params: dict = None):
+        
+        dataset_a = self.load_dataset(dataset_path, self.get_transformers(image_size, normalization_values, data_augmentation))
+        dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
+
+        self.train(dataloader_a, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot, 
+                   dataset_b_path, dataset_b_progress, normalization_values, scheduler_params)
+
+    def train(self, dataloader_a: DataLoader, batch_size: int, image_size: int, epochs: int,
               save_model_checkpoints: bool = False, wandb_plot: bool = False,
               dataset_b_path='../dataset/photo_jpg',
               dataset_b_progress='../dataset/photo_jpg_test',
@@ -505,12 +548,10 @@ class ABGAN(GAN):
             self.lr_scheduler_g = self.lr_scheduler_class(self.optim_g, **scheduler_params)
             self.lr_scheduler_d = self.lr_scheduler_class(self.optim_d, **scheduler_params)
 
-        # prepares both the dataset of the domain A and the dataset of the domain B
+        # prepares both the dataset of the domain B
 
-        dataset_a = self.prepare_dataset(image_size, normalization_values)
         dataset_b = self.prepare_dataset_b(image_size, normalization_values, dataset_b_path)
 
-        dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
         dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True, num_workers=0)
 
         # if checkpoints of the model will be saved, directories to store them are created
