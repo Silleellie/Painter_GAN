@@ -1,20 +1,11 @@
-import os
-import random
-import re
-import shutil
-from pathlib import Path
+from abc import abstractmethod
 
-import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
-import torchvision.utils as vutils
-import torchvision.transforms as transforms
-import numpy as np
-from matplotlib import pyplot as plt
-from torch.utils.data import ConcatDataset
 
-from src.utils import PaintingsFolder
+from src.abstract_gan import LatentGAN
+from src.utils import device
 
 
 class Decoder(nn.Module):
@@ -181,62 +172,22 @@ class Discriminator(nn.Module):
         return out
 
 
-class BEGAN:
-    def __init__(self, latent_dim, num_filters, noise_fn, dataloader, total_epochs,
-                 batch_size=32, lr_d=0.0004, lr_g=0.0004, device: torch.device = 'cpu'):
-        """A very basic DCGAN class for generating MNIST digits
-        Args:
-            generator: a Ganerator network
-            discriminator: A Discriminator network
-            noise_fn: function f(num: int) -> pytorch tensor, (latent vectors)
-            dataloader: a pytorch dataloader for loading images
-            batch_size: training batch size. Must match that of dataloader
-            device: cpu or CUDA
-            lr_d: learning rate for the discriminator
-            lr_g: learning rate for the generator
-        """
-        self.generator = Generator(latent_dim, num_filters).to(device)
-        self.generator.weights_init()
+class INFOGAN(LatentGAN):
 
-        self.discriminator = Discriminator(latent_dim, num_filters).to(device)
-        self.discriminator.weights_init()
+    def __init__(self, latent_dim: int, generator: nn.Module = None, discriminator: nn.Module = None, 
+                 optim_g: torch.optim = None, optim_d: torch.optim = None, noise_fn=None, lr_scheduler_class: type = None) -> None:
 
-        self.noise_fn = noise_fn
-        self.dataloader = dataloader
-        self.batch_size = batch_size
-        self.total_epochs = total_epochs
-        self.device = device
+        def noise(x): return torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
+
+        noise_fn = noise if noise_fn is None else noise_fn
 
         self.criterion = nn.L1Loss()
-        self.optim_d = optim.Adam(self.discriminator.parameters(),
-                                  lr=lr_d, betas=(0.5, 0.999))
-        self.optim_g = optim.Adam(self.generator.parameters(),
-                                  lr=lr_g, betas=(0.5, 0.999))
 
         self.gamma = 0.5  # controls diversity of generated images
         self.lambda_k = 0.001  # used in paper
         self.Kt = 0.0  # starts at 0
 
-        self.scheduler_d = optim.lr_scheduler.ReduceLROnPlateau(self.optim_d)
-        self.scheduler_g = optim.lr_scheduler.ReduceLROnPlateau(self.optim_g)
-
-    def generate_samples(self, latent_vec=None, num=None):
-        """Sample images from the generator.
-        Images are returned as a 4D tensor of values between -1 and 1.
-        Dimensions are (number, channels, height, width). Returns the tensor
-        on cpu.
-        Args:
-            latent_vec: A pytorch latent vector or None
-            num: The number of samples to generate if latent_vec is None
-        If latent_vec and num are None then use self.batch_size
-        random latent vectors.
-        """
-        num = self.batch_size if num is None else num
-        latent_vec = self.noise_fn(num) if latent_vec is None else latent_vec
-        with torch.no_grad():
-            samples = self.generator(latent_vec)
-        samples = samples.detach().cpu()  # move images to cpu
-        return samples
+        super().__init__(latent_dim, generator, discriminator, optim_g, optim_d, noise_fn, lr_scheduler_class)
 
     def train_step_generator(self, current_batch_size):
         """Train the generator one step and return the loss."""
@@ -251,6 +202,72 @@ class BEGAN:
         self.optim_g.step()
 
         return loss
+    
+    @abstractmethod
+    def train_step_discriminator(self, real_samples, current_batch_size):
+        raise NotImplementedError
+
+    def train_step(self, real_data):
+        current_batch_size = real_data.size(0)
+        # ----------
+        #  Training generator
+        # ----------
+        loss_g = self.train_step_generator(current_batch_size)
+
+        # ----------
+        #  Training discriminator
+        # ----------
+        loss_d, loss_d_real, loss_d_fake = self.train_step_discriminator(real_data, current_batch_size)
+
+        # ----------------
+        # Update weights
+        # ----------------
+        # Kt update
+        balance = (self.gamma * loss_d_real - loss_d_fake)
+        self.Kt = max(min(self.Kt + self.lambda_k * balance.item(), 1.0), 0.0)
+
+        # Update convergence metric
+        M = (loss_d_real + torch.abs(balance)).item()
+
+        # ----------------
+        # Update metrics for logging
+        # ----------------
+        loss_d = loss_d.item()
+        loss_g = loss_g.item()
+
+        return {"G_loss": loss_g, "D_loss": loss_d, "Convergence": M}
+
+
+class BEGAN(INFOGAN):
+    def __init__(self, latent_dim = 64, num_filters = 64, noise_fn=None,
+                 lr_d=0.0004, lr_g=0.0004, lr_scheduler_class=None):
+        """A very basic DCGAN class for generating MNIST digits
+        Args:
+            generator: a Ganerator network
+            discriminator: A Discriminator network
+            noise_fn: function f(num: int) -> pytorch tensor, (latent vectors)
+            dataloader: a pytorch dataloader for loading images
+            batch_size: training batch size. Must match that of dataloader
+            device: cpu or CUDA
+            lr_d: learning rate for the discriminator
+            lr_g: learning rate for the generator
+        """
+
+        lr_scheduler_class = optim.lr_scheduler.ReduceLROnPlateau if lr_scheduler_class is None else lr_scheduler_class
+        generator = Generator(latent_dim, num_filters).to(device)
+
+        discriminator = Discriminator(latent_dim, num_filters).to(device)
+
+        optim_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
+        optim_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
+
+        super().__init__(latent_dim,
+                         generator=generator,
+                         discriminator=discriminator,
+                         optim_g=optim_g,
+                         optim_d=optim_d,
+                         noise_fn=noise_fn,
+                         lr_scheduler_class=lr_scheduler_class)
 
     def train_step_discriminator(self, real_samples, current_batch_size):
         """Train the discriminator one step and return the losses."""
@@ -273,74 +290,6 @@ class BEGAN:
 
         return loss, loss_real, loss_fake
 
-    def train_epoch(self):
-        loss_g_running, loss_d_running, M_running = 0, 0, 0
-        for batch, (real_samples, _) in enumerate(self.dataloader):
-            current_batch_size = real_samples.size(0)
-
-            real_samples = real_samples.to(self.device)
-
-            # ----------
-            #  Training generator
-            # ----------
-            loss_g = self.train_step_generator(current_batch_size)
-
-            # ----------
-            #  Training discriminator
-            # ----------
-            loss_d, loss_d_real, loss_d_fake = self.train_step_discriminator(real_samples, current_batch_size)
-
-            # ----------------
-            # Update weights
-            # ----------------
-            # Kt update
-            balance = (self.gamma * loss_d_real - loss_d_fake)
-            self.Kt = max(min(self.Kt + self.lambda_k * balance.item(), 1.0), 0.0)
-
-            # Update convergence metric
-            M = (loss_d_real + torch.abs(balance)).item()
-
-            # ----------------
-            # Update metrics for logging
-            # ----------------
-            loss_d_running += loss_d.item()
-            loss_g_running += loss_g.item()
-            M_running += M
-
-        n_batches = len(self.dataloader)
-        loss_g_running /= n_batches
-        loss_d_running /= n_batches
-        M_running /= n_batches
-
-        self.scheduler_g.step(loss_g_running)
-        self.scheduler_d.step(loss_d_running)
-
-        return loss_g_running, loss_d_running, M_running, self.Kt
-
-
-def clean_dataset(resized_images_dir):
-    for filename in os.listdir(resized_images_dir):
-
-        if os.path.isfile(os.path.join(resized_images_dir, filename)):
-            if re.match(r'Albrecht_D(?=.+rer_(\d+))', filename):
-
-                painting_number = re.findall(r'Albrecht_D(?=.+rer_(\d+)\.jpg)', filename)[0]
-
-                old_fullpath = os.path.join(resized_images_dir, filename)
-
-                filename = f'Albrecht_Dürer_{painting_number}.jpg'
-                new_fullpath = os.path.join(resized_images_dir, filename)
-
-                if not os.path.isfile(new_fullpath):
-                    os.rename(old_fullpath, new_fullpath)
-
-            artist_name = re.findall(r'(.*?[_.*?]*)(?=_\d+)', filename, re.UNICODE)[0]
-
-            Path(os.path.join(resized_images_dir, artist_name)).mkdir(parents=True, exist_ok=True)
-            shutil.move(os.path.join(resized_images_dir, filename), os.path.join(resized_images_dir,
-                                                                                 artist_name,
-                                                                                 filename))
-
 
 if __name__ == '__main__':
     """
@@ -350,132 +299,5 @@ if __name__ == '__main__':
     IMPROVED BEGAN PAPER
     https://wlouyang.github.io/Papers/iBegan.pdf
     """
-    output_dir = "../output/began_test_pytorch"
-
-    shutil.rmtree(output_dir, ignore_errors=True)
-    os.makedirs(output_dir)
-
-    resized_images_dir = '../dataset/best_artworks/resized/resized'
-    image_size = 32
-    batch_size = 16
-    epochs = 200
-    latent_dim = 64
-    num_filters = 64
-    lr_discriminator = 0.0001
-    lr_generator = 0.0001
-
-    # Number of GPUs available. Use 0 for CPU mode.
-    ngpu = 1
-
-    # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-
-    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
-
-    death_monet = 1926
-    impressionist_artists_dict = dict()
-    other_artists_to_consider_dict = dict()
-    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
-                                                                       metadata_csv['name'],
-                                                                       metadata_csv['years'],
-                                                                       metadata_csv['genre']):
-
-        dob = artist_years.split(' ')[0]
-        if re.search(r'impressionism', artistic_movement.lower()):
-
-            impressionist_artists_dict[artist_name] = artist_id
-        elif int(dob) < death_monet:
-            other_artists_to_consider_dict[artist_name] = artist_id
-
-    clean_dataset(resized_images_dir)
-
-    train_impressionist = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_impressionist_augment1 = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.TrivialAugmentWide(),
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_others = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=other_artists_to_consider_dict
-    )
-
-    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
-    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
-    subset_idx_list = []
-    current_artist_id = train_others.targets[0]
-    idx_paintings_current = []
-    for i in range(len(train_others.targets)):
-        if train_others.targets[i] != current_artist_id:
-            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
-            subset_idx_list.extend(idx_paintings_to_hold)
-
-            current_artist_id = train_others.targets[i]
-            idx_paintings_current.clear()
-        else:
-            indices_paintings = idx_paintings_current.append(i)
-
-    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
-
-    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
-    dataset = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
-
-    # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=2)
-
-    # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
-    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
-
-
-    gan = BEGAN(latent_dim, num_filters, noise_fn, dataloader, batch_size=batch_size, total_epochs=epochs,
-                device=device, lr_d=lr_discriminator, lr_g=lr_generator)
-
-    print("Started training...")
-    for i in range(epochs):
-        g_loss, d_loss, M, Kt = gan.train_epoch()
-
-        print(
-            "[Epoch %d/%d] [G loss: %f] [D loss: %f]  -- M: %f, k: %f"
-            % (i + 1, epochs, g_loss, d_loss, M, Kt)
-        )
-
-        # save grid of 64 imgs for each epoch, to see generator progress
-        images = gan.generate_samples(num=64)
-        ims = vutils.make_grid(images, normalize=True)
-        plt.axis("off")
-        plt.title(f"Epoch {i + 1}")
-        plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'{output_dir}/epoch{i + 1}.png')
+    gan = BEGAN()
+    gan.train_with_default_dataset(16, 32, 200)
