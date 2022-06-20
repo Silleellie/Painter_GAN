@@ -265,32 +265,34 @@ class LatentGAN(GAN):
         self.discriminator.eval()
     
     def train_with_default_dataset(self, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, wandb_plot: bool = False,
-              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-              scheduler_params: dict = None):
+                                   save_model_checkpoints: bool = False, wandb_plot: bool = False, save_imgs_local: bool = False,
+                                   normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                   scheduler_params: dict = None):
 
         # prepare training dataset and load it
 
         data = self.prepare_dataset(image_size, normalization_values)
         dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
 
-        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot, scheduler_params)
+        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints,
+                   wandb_plot, save_imgs_local, scheduler_params)
     
     def train_with_custom_dataset(self, dataset_path: str, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, wandb_plot: bool = False,
-              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False,
-              scheduler_params: dict = None):
+                                  save_model_checkpoints: bool = False, wandb_plot: bool = False, save_imgs_local: bool = False,
+                                  normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False,
+                                  scheduler_params: dict = None):
 
         # prepare training dataset and load it
         
         data = self.load_dataset(dataset_path, self.get_transformers(image_size, normalization_values, data_augmentation))
         dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, num_workers=0)
 
-        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints, wandb_plot, scheduler_params)
+        self.train(dataloader, batch_size, image_size, epochs, save_model_checkpoints,
+                   wandb_plot, save_imgs_local, scheduler_params)
         
 
     def train(self, dataloader: DataLoader, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, wandb_plot: bool = False,
+              save_model_checkpoints: bool = False, wandb_plot: bool = False, save_imgs_local: bool = False,
               scheduler_params: dict = None):
 
         # save_model_checkpoints: if True, automatically saves the state of the GAN after 100 epochs
@@ -320,11 +322,8 @@ class LatentGAN(GAN):
         if save_model_checkpoints:
             self.setup_checkpoint_directories()
 
-        # if wandb_plot, a static noise will be created which will be used to generate the images during training
-        # (as to have the same starting point each time new images are created and sent to wandb)
-        if wandb_plot:
-            static_noise = self.noise_fn(batch_size)
-
+        # static noise of 64 images that will be used to save imgs or to sent them to wandb
+        static_noise = self.noise_fn(64)
         metrics_defined_in_wandb = False
 
         for i in range(epochs):
@@ -341,21 +340,24 @@ class LatentGAN(GAN):
                         wandb.define_metric(loss_name, step_metric="epoch")
                     metrics_defined_in_wandb = True
 
-            num_of_losses = len(losses)
+            loss_string = ', '.join([f"{loss_name}={loss_value}" for loss_name, loss_value in losses.items()])
 
-            for j, (loss_name, loss_value) in enumerate(losses.items()):
-                if j != num_of_losses - 1:
-                    end = ', '
-                else:
-                    end = '.'
-
-                print(loss_name + "= " + str(loss_value), end=end)
+            print(loss_string)
 
             # saves checkpoint after 100 iterations
 
             if (i + 1) % 50 == 0 and save_model_checkpoints:
                 os.makedirs(str("output/" + self.__class__.__name__ + "/checkpoints/" + str(i + 1)))
                 self.save_model(str("output/" + self.__class__.__name__ + "/checkpoints/" + str(i + 1)))
+
+            if save_imgs_local:
+                os.makedirs(f'output/{self.__class__.__name__}/imgs', exist_ok=True)
+                images = self.generate_samples(latent_vec=static_noise)
+                ims = vutils.make_grid(images, normalize=True)
+                plt.axis("off")
+                plt.title(f"Epoch {i + 1}")
+                plt.imshow(np.transpose(ims, (1, 2, 0)))
+                plt.savefig(f'output/{self.__class__.__name__}/imgs/epoch{i + 1}.png')
 
             # sends losses at each iteration and the generated images each 10 iterations
 
@@ -364,7 +366,7 @@ class LatentGAN(GAN):
                 for loss_name, loss_value in losses.items():
                     log_dict[loss_name] = loss_value
                 if ((i + 1) % 10 == 0 or (i == 0)):
-                    images = self.generate_samples(batch_size, latent_vec=static_noise)
+                    images = self.generate_samples(64, latent_vec=static_noise)
                     log_dict['training_images'] = self.plot_training_images(images, i)
                 wandb.log(log_dict)
 
@@ -382,7 +384,7 @@ class LatentGAN(GAN):
         # batch_losses = losses for single batch
         # running_losses = average losses for all the batches
 
-        for (real_samples, _) in tqdm(dataloader, total=n_batches):
+        for (real_samples, _) in tqdm(dataloader, total=n_batches, file=sys.stdout):
             real_samples = real_samples.to(device)
 
             batch_losses = self.train_step(real_samples)
@@ -527,11 +529,11 @@ class ABGAN(GAN):
         self.discriminator_b.eval()
     
     def train_with_default_dataset(self, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, wandb_plot: bool = False,
-              dataset_b_path='../dataset/photo_jpg',
-              dataset_b_progress='../dataset/photo_jpg_test',
-              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-              scheduler_params: dict = None):
+                                   save_model_checkpoints: bool = False, wandb_plot: bool = False,
+                                   dataset_b_path='../dataset/photo_jpg',
+                                   dataset_b_progress='../dataset/photo_jpg_test',
+                                   normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                   scheduler_params: dict = None):
 
         dataset_a = self.prepare_dataset(image_size, normalization_values)
         dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
@@ -540,11 +542,11 @@ class ABGAN(GAN):
                    dataset_b_path, dataset_b_progress, normalization_values, scheduler_params)
     
     def train_with_custom_dataset(self, dataset_path: str, batch_size: int, image_size: int, epochs: int,
-              save_model_checkpoints: bool = False, wandb_plot: bool = False,
-              dataset_b_path='../dataset/photo_jpg',
-              dataset_b_progress='../dataset/photo_jpg_test',
-              normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False,
-              scheduler_params: dict = None):
+                                  save_model_checkpoints: bool = False, wandb_plot: bool = False,
+                                  dataset_b_path='../dataset/photo_jpg',
+                                  dataset_b_progress='../dataset/photo_jpg_test',
+                                  normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), data_augmentation: bool = False,
+                                  scheduler_params: dict = None):
         
         dataset_a = self.load_dataset(dataset_path, self.get_transformers(image_size, normalization_values, data_augmentation))
         dataloader_a = DataLoader(dataset_a, batch_size=batch_size, shuffle=True, num_workers=0)
