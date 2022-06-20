@@ -1,22 +1,9 @@
-import os
-import random
-import shutil
-import re
-
-import numpy as np
-import pandas as pd
 import torch
+import torch.nn as nn
 from torch import optim
 
-from src.began_pytorch_good import BEGAN, clean_dataset
-import torch.nn as nn
-import torchvision.utils as vutils
-from matplotlib import pyplot as plt
-from torch.utils.data import ConcatDataset
-import torchvision.transforms as transforms
-
-from src.utils import PaintingsFolder
-
+from src.began_pytorch_good import INFOGAN
+from src.utils import device
 
 class Decoder(nn.Module):
     def __init__(self, latent_dimension, num_filters):
@@ -210,10 +197,10 @@ class Discriminator(nn.Module):
         return out
 
 
-class IBEGAN(BEGAN):
+class IBEGAN(INFOGAN):
 
-    def __init__(self, latent_dim, num_filters, noise_fn, dataloader, total_epochs,
-                 batch_size=32, lr_d=0.0004, lr_g=0.0004, device: torch.device = 'cpu'):
+    def __init__(self, latent_dim = 128, num_filters = 64, noise_fn = None,
+                 lr_d=0.0004, lr_g=0.0004, lr_scheduler_class = None):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -225,26 +212,26 @@ class IBEGAN(BEGAN):
             lr_d: learning rate for the discriminator
             lr_g: learning rate for the generator
         """
-        super(IBEGAN, self).__init__(latent_dim, num_filters, noise_fn, dataloader, total_epochs,
-                                     batch_size, lr_d, lr_g, device)
 
-        self.generator = Generator(latent_dim, num_filters).to(device)
-        self.generator.weights_init()
+        lr_scheduler_class = optim.lr_scheduler.ReduceLROnPlateau if lr_scheduler_class is None else lr_scheduler_class
+        generator = Generator(latent_dim, num_filters).to(device)
 
-        self.discriminator = Discriminator(latent_dim, num_filters).to(device)
-        self.discriminator.weights_init()
+        discriminator = Discriminator(latent_dim, num_filters).to(device)
 
         # need to redefine optimizer since we changed generator and discriminator
-        self.optim_d = optim.Adam(self.discriminator.parameters(),
-                                  lr=lr_d, betas=(0.5, 0.999))
-        self.optim_g = optim.Adam(self.generator.parameters(),
-                                  lr=lr_g, betas=(0.5, 0.999))
+        optim_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
+        optim_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
+
+        super().__init__(latent_dim,
+                         generator=generator,
+                         discriminator=discriminator,
+                         optim_g=optim_g,
+                         optim_d=optim_d,
+                         noise_fn=noise_fn,
+                         lr_scheduler_class=lr_scheduler_class)
 
         self.criterion_noisy = nn.MSELoss()
         self.lambda_noise = 2
-
-        self.scheduler_d = optim.lr_scheduler.ReduceLROnPlateau(self.optim_d)
-        self.scheduler_g = optim.lr_scheduler.ReduceLROnPlateau(self.optim_g)
 
     def train_step_discriminator(self, real_samples, current_batch_size):
         """Train the discriminator one step and return the losses."""
@@ -286,132 +273,6 @@ if __name__ == '__main__':
     IMPROVED BEGAN PAPER
     https://wlouyang.github.io/Papers/iBegan.pdf
     """
-    output_dir = "../output/ibegan_test_pytorch"
 
-    shutil.rmtree(output_dir, ignore_errors=True)
-    os.makedirs(output_dir)
-
-    resized_images_dir = '../dataset/best_artworks/resized/resized'
-    image_size = 64
-    batch_size = 16
-    epochs = 500
-    latent_dim = 128
-    num_filters = 64
-    lr_discriminator = 0.0001
-    lr_generator = 0.0005
-
-    # Number of GPUs available. Use 0 for CPU mode.
-    ngpu = 1
-
-    # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-
-    metadata_csv = pd.read_csv('../dataset/best_artworks/artists.csv')
-
-    death_monet = 1926
-    impressionist_artists_dict = dict()
-    other_artists_to_consider_dict = dict()
-    for artist_id, artist_name, artist_years, artistic_movement in zip(metadata_csv['id'],
-                                                                       metadata_csv['name'],
-                                                                       metadata_csv['years'],
-                                                                       metadata_csv['genre']):
-
-        dob = artist_years.split(' ')[0]
-        if re.search(r'impressionism', artistic_movement.lower()):
-
-            impressionist_artists_dict[artist_name] = artist_id
-        elif int(dob) < death_monet:
-            other_artists_to_consider_dict[artist_name] = artist_id
-
-    clean_dataset(resized_images_dir)
-
-    train_impressionist = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_impressionist_augment1 = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.TrivialAugmentWide(),
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=impressionist_artists_dict
-    )
-
-    train_others = PaintingsFolder(
-        root=resized_images_dir,
-        transform=transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.CenterCrop((image_size, image_size)),
-            transforms.ToTensor(),
-
-            # normalizes images in range [-1,1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-
-        ]),
-        artists_dict=other_artists_to_consider_dict
-    )
-
-    # Ugly for loop but better for efficiency, we save 5 random paintings for each 'other artist'.
-    # we exploit the fact that first we have all paintings of artist x, then we have all paintings of artist y, etc.
-    subset_idx_list = []
-    current_artist_id = train_others.targets[0]
-    idx_paintings_current = []
-    for i in range(len(train_others.targets)):
-        if train_others.targets[i] != current_artist_id:
-            idx_paintings_to_hold = random.sample(idx_paintings_current, 5)
-            subset_idx_list.extend(idx_paintings_to_hold)
-
-            current_artist_id = train_others.targets[i]
-            idx_paintings_current.clear()
-        else:
-            indices_paintings = idx_paintings_current.append(i)
-
-    train_others = torch.utils.data.Subset(train_others, subset_idx_list)
-
-    # concat original impressionist, augmented impressionist, 5 random paintings of other artists
-    dataset = ConcatDataset([train_impressionist, train_impressionist_augment1, train_others])
-
-    # Create the dataloader
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=2)
-
-    # noise_fn is the function which will sample the latent vector from the gaussian distribution in this case
-    noise_fn = lambda x: torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
-
-    gan = IBEGAN(latent_dim, num_filters, noise_fn, dataloader, batch_size=batch_size, device=device,
-                 total_epochs=epochs, lr_d=1e-4, lr_g=1e-4)
-
-    print("Started training...")
-    static_noise_batch = noise_fn(64)  # we will see how it evolves accross epochs
-    for i in range(epochs):
-        g_loss, d_loss, M, Kt = gan.train_epoch()
-
-        print(
-            "[Epoch %d/%d] [G loss: %f] [D loss: %f]  -- M: %f, k: %f"
-            % (i + 1, epochs, g_loss, d_loss, M, Kt)
-        )
-
-        # save grid of 64 imgs for each epoch, to see generator progress
-        images = gan.generate_samples(static_noise_batch)
-        ims = vutils.make_grid(images, normalize=True)
-        plt.axis("off")
-        plt.title(f"Epoch {i + 1}")
-        plt.imshow(np.transpose(ims, (1, 2, 0)))
-        plt.savefig(f'{output_dir}/epoch{i + 1}.png')
+    gan = IBEGAN()
+    gan.train_with_default_dataset(16, 64, 10)
