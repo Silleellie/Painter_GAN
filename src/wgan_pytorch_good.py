@@ -25,8 +25,9 @@ class Generator(nn.Module):
         """
         super().__init__()
         self.body = nn.Sequential(
-            Generator._default_block(channels_noise, features_gen * 4, 4, 1, 0), 
-            Generator._default_block(features_gen * 4, features_gen * 2, 4, 2, 1), 
+            Generator._default_block(channels_noise, features_gen * 8, 4, 1, 0), 
+            Generator._default_block(features_gen * 8, features_gen * 4, 4, 2, 1), 
+            Generator._default_block(features_gen * 4, features_gen * 2, 4, 2, 1),
             Generator._default_block(features_gen * 2, features_gen, 4, 2, 1), 
             nn.ConvTranspose2d(
                 features_gen, channels_img, kernel_size=4, stride=2, padding=1, bias=False),
@@ -56,7 +57,8 @@ class Critic(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             Critic._default_block(features_d, features_d * 2, 4, 2, 1),
             Critic._default_block(features_d * 2, features_d * 4, 4, 2, 1),
-            nn.Conv2d(features_d * 4, 1, kernel_size=4, stride=1, padding=0, bias=False)
+            Critic._default_block(features_d * 4, features_d * 8, 4, 2, 1),
+            nn.Conv2d(features_d * 8, 1, kernel_size=4, stride=1, padding=0, bias=False)
         )
 
     @staticmethod
@@ -178,5 +180,5 @@ class WGAN_GP(LatentGAN):
 
 if __name__ == '__main__':
     gan = WGAN_GP()
-    gan.train(32, 32, 20, True, True)
+    gan.train_with_default_dataset(64, 64, 20, False, False)
 
