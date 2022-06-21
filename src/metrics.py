@@ -10,6 +10,7 @@ from torchmetrics.image.inception import InceptionScore
 from torchmetrics.image.fid import FrechetInceptionDistance, NoTrainInceptionV3, _compute_fid
 from torchmetrics.utilities.data import dim_zero_cat
 from torch.nn.functional import cosine_similarity
+from torch.utils.data import DataLoader
 
 import wandb
 
@@ -173,12 +174,14 @@ class ISMetric(GANMetricFake):
 
 class TestEvaluate:
 
-    def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64, cut: int = None):
+    def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64, cut: int = None, batch_size: int = 64):
 
         transf = transforms.Compose([transforms.Resize((image_size, image_size)),
                                      transforms.PILToTensor()])
 
         fake_data = ClasslessImageFolder(path_fake, transform=transf)
+        self.fake_images = DataLoader(fake_data, batch_size=batch_size, num_workers=0)
+        """
         fake_images = []
 
         if cut is None:
@@ -188,6 +191,7 @@ class TestEvaluate:
             for (fake, _) in tqdm(fake_data[:cut], desc="Loading generated images"):
                 fake_images.append(fake)
         self.fake_images = torch.stack(fake_images)
+        """
 
         self.real_images = None
         if path_real is not None:
@@ -213,18 +217,22 @@ class TestEvaluate:
             for metric in metrics:
                 wandb.define_metric(str(metric))
 
+        metrics_for_batches = {}
         for metric in metrics:
+            metrics_for_batches[str(metric)] = []
             print("COMPUTING METRIC: ", str(metric))
-            if isinstance(metric, GANMetricFake):
-                metric.update(self.fake_images)
-            elif isinstance(metric, GANMetricRealFake):
-                metric.update(self.real_images, real=True)
-                metric.update(self.fake_images, real=False)
+            for (test_batch, _) in self.fake_images:
+                if isinstance(metric, GANMetricFake):
+                    metric.update(test_batch)
+                elif isinstance(metric, GANMetricRealFake):
+                    metric.update(self.real_images, real=True)
+                    metric.update(test_batch, real=False)
+                metrics_for_batches[str(metric)].append(metric.compute())
+                metric.reset()
 
         results = {}
         for metric in metrics:
-            results[str(metric)] = metric.compute()
-            metric.reset()
+            results[str(metric)] = np.average(metrics_for_batches[str(metric)])
         
         if wandb_plot:
             wandb.log(results)
