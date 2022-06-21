@@ -23,7 +23,7 @@ import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
 from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
-from src.metrics import Metric, GANMetricFake, GANMetricRealFake
+from src.metrics import GANMetric, GANMetricFake, GANMetricRealFake
 
 
 # Generic gan class containing all the main methods used by the possible gan implementations
@@ -405,7 +405,7 @@ class LatentGAN(GAN):
         raise NotImplementedError
 
     # TO-DO: when approaching testing in the future after all the models have been trained add simple wandb integration
-    def test(self, real_data, metrics_to_consider: List[Metric]):
+    def test(self, real_data, metrics_to_consider: List[GANMetric]):
         real_images = []
         print("STARTING TESTING")
         print("LOADING REAL DATA")
@@ -415,6 +415,8 @@ class LatentGAN(GAN):
 
         size = real_data.size(0)
         fake_images = self.generate_samples(size)
+        fake_images = list(map(lambda x: (x/2 + 0.5) * 255, fake_images))
+        fake_images = torch.stack(fake_images)
 
         for metric in metrics_to_consider:
             if isinstance(metric, GANMetricFake):
@@ -685,19 +687,19 @@ class ABGAN(GAN):
     def train_step(self, real_data_a, real_data_b):
         raise NotImplementedError
 
-    def test(self, real_data, test_data: DataLoader, metrics_to_consider: List[Metric]):
+    def test(self, real_data, test_data: DataLoader, metrics_to_consider: List[GANMetric]):
         real_images = []
         print("STARTING TESTING")
         print("LOADING REAL DATA")
         for (real, _) in tqdm(real_data):
             real_images.append(real)
-        real_images = torch.stack(real_images[:100])
+        real_images = torch.stack(real_images)
 
         test_images = []
         print("LOADING FAKE DATA")
         for (test, _) in tqdm(test_data):
             test_images.extend(self.generate_images_b2a(test.to(device)))
-        test_images = list(map(lambda x: (x/2 + 0.5) * 255, test_images))[:100]
+        test_images = list(map(lambda x: (x/2 + 0.5) * 255, test_images))
         test_images = torch.stack(test_images)
 
         for metric in metrics_to_consider:
