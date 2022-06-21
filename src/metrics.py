@@ -11,6 +11,8 @@ from torchmetrics.image.fid import FrechetInceptionDistance, NoTrainInceptionV3,
 from torchmetrics.utilities.data import dim_zero_cat
 from torch.nn.functional import cosine_similarity
 
+import wandb
+
 
 # implementation of the MiFid metric based on the original implementation of the fid metric in the torchmetrics library
 # it expands the Fid implementation by adding the computations associated to the MiFid metric
@@ -192,9 +194,14 @@ class TestEvaluate:
                 real_images.append(real)
             self.real_images = torch.stack(real_images)
 
-    def perform(self, metrics: List[GANMetric]):
+    def perform(self, metrics: List[GANMetric], wandb_plot: bool = False, run_name: str = "test_run"):
         if any(isinstance(metric, GANMetricRealFake) for metric in metrics) and self.real_images is None:
             raise ValueError("You must pass also the path of the fake images!")
+        
+        if wandb_plot:
+            run = wandb.init(project="Painter GAN", entity="painter_gan", name=run_name)
+            for metric in metrics:
+                wandb.define_metric(str(metric))
 
         for metric in metrics:
             print("COMPUTING METRIC: ", str(metric))
@@ -208,5 +215,9 @@ class TestEvaluate:
         for metric in metrics:
             results[str(metric)] = metric.compute()
             metric.reset()
+        
+        if wandb_plot:
+            wandb.log(results)
+            run.finish()
 
         return results
