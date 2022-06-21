@@ -29,3 +29,9 @@ class StyleGAN3:
                "--freezed=10 --metrics=None "
 
         os.system(comm)
+
+    def generate_images(self,  checkpoint_to_load: str, output_directory: str = 'stylegan3_output'):
+
+        comm = f"python gen_images.py --outdir={output_directory} --network={checkpoint_to_load}"
+
+        os.system(comm)
