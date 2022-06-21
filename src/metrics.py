@@ -228,7 +228,18 @@ class TestEvaluate:
 
         results = {}
         for metric in metrics:
-            results[str(metric)] = np.average(metrics_for_batches[str(metric)])
+            if isinstance(metrics_for_batches[str(metric)], tuple) or isinstance(metrics_for_batches[str(metric)], list):
+                first_values = []
+                second_values = []
+
+                for (value1, value2) in metrics_for_batches[str(metric)]:
+                    first_values.append(value1)
+                    second_values.append(value2)
+                
+                results[str(metric)] = (np.average(first_values), np.average(second_values))
+
+            else:
+                results[str(metric)] = np.average(metrics_for_batches[str(metric)])
         
         if wandb_plot:
             wandb.log(results)
