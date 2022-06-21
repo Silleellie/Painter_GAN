@@ -685,7 +685,7 @@ class ABGAN(GAN):
     def train_step(self, real_data_a, real_data_b):
         raise NotImplementedError
 
-    def test(self, real_data, test_data, metrics_to_consider: List[Metric]):
+    def test(self, real_data, test_data: DataLoader, metrics_to_consider: List[Metric]):
         real_images = []
         print("STARTING TESTING")
         print("LOADING REAL DATA")
@@ -696,16 +696,16 @@ class ABGAN(GAN):
         test_images = []
         print("LOADING FAKE DATA")
         for (test, _) in tqdm(test_data):
-            test_images.append(test.to(device))
+            test_images.extend(self.generate_images_b2a(test.to(device)))
         test_images = torch.stack(test_images)
-        fake_images = self.generate_images_b2a(test_images)
 
         for metric in metrics_to_consider:
+            print("COMPUTING METRIC: ", str(metric))
             if isinstance(metric, GANMetricFake):
-                metric.update(fake_images)
+                metric.update(test_images)
             elif isinstance(metric, GANMetricRealFake):
                 metric.update(real_images, real=True)
-                metric.update(fake_images, real=False)
+                metric.update(test_images, real=False)
 
         results = {}
         for metric in metrics_to_consider:
