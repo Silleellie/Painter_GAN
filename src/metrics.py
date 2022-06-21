@@ -174,7 +174,7 @@ class ISMetric(GANMetricFake):
 
 class TestEvaluate:
 
-    def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64, cut: int = None, batch_size: int = 64):
+    def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64, batch_size: int = 64):
 
         transf = transforms.Compose([transforms.Resize((image_size, image_size)),
                                      transforms.PILToTensor()])
@@ -200,12 +200,8 @@ class TestEvaluate:
 
             real_images = []
 
-            if cut is None:
-                for (real, _) in tqdm(real_data, desc="Loading real images"):
-                    real_images.append(real)
-            else:
-                for (real, _) in tqdm(real_data[:cut], desc="Loading real images"):
-                    real_images.append(real)
+            for (real, _) in tqdm(real_data, desc="Loading real images"):
+                real_images.append(real)
             self.real_images = torch.stack(real_images)
 
     def perform(self, metrics: List[GANMetric], wandb_plot: bool = False, run_name: str = "test_run"):
@@ -221,7 +217,7 @@ class TestEvaluate:
         for metric in metrics:
             metrics_for_batches[str(metric)] = []
             print("COMPUTING METRIC: ", str(metric))
-            for (test_batch, _) in self.fake_images:
+            for (test_batch, _) in tqdm(self.fake_images):
                 if isinstance(metric, GANMetricFake):
                     metric.update(test_batch)
                 elif isinstance(metric, GANMetricRealFake):
