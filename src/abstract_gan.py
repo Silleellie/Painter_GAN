@@ -12,7 +12,6 @@ from time import time
 
 from matplotlib import pyplot as plt
 from tqdm import tqdm
-from typing import List
 
 import wandb
 import torch
@@ -23,7 +22,7 @@ import torchvision.utils as vutils
 from torch.utils.data import ConcatDataset, DataLoader
 
 from src.utils import clean_dataset, PaintingsFolder, device, ClasslessImageFolder
-from src.metrics import GANMetric, GANMetricFake, GANMetricRealFake
+from torchvision.utils import save_image
 
 
 # Generic gan class containing all the main methods used by the possible gan implementations
@@ -403,6 +402,17 @@ class LatentGAN(GAN):
     @abstractmethod
     def train_step(self, real_data):
         raise NotImplementedError
+    
+    def save_generated_images(self, output_dir: str, sample_size: int, **args):
+
+        samples = self.generate_samples(sample_size, **args)
+
+        if not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+
+        for i, image in enumerate(tqdm(samples)):
+            save_image(image, output_dir + "/" + str(i) + ".png", normalize=True)
+
 
 
 class ABGAN(GAN):
@@ -658,3 +668,22 @@ class ABGAN(GAN):
     @abstractmethod
     def train_step(self, real_data_a, real_data_b):
         raise NotImplementedError
+    
+    def save_generated_images(self, input_dir: str, output_dir: str, image_size: int = 64):
+
+        transf_test = transforms.Compose([transforms.Resize((image_size, image_size)),
+                                          transforms.ToTensor(),
+                                          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+        
+        data = self.load_dataset(input_dir, transf_test)
+        data = DataLoader(data, batch_size=1, shuffle=True, num_workers=0)
+
+        images = []
+        for (imgs, _) in tqdm(data):
+            images.extend(self.generate_images_b2a(imgs.to(device)))
+
+        if not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        
+        for i, image in enumerate(tqdm(images)):
+            save_image(image, output_dir + "/" + str(i) + ".png", normalize=True)
