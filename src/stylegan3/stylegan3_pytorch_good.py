@@ -32,6 +32,8 @@ class StyleGAN3:
 
     def generate_images(self,  checkpoint_to_load: str, output_directory: str = 'stylegan3_output'):
 
-        comm = f"python gen_images.py --outdir={output_directory} --network={checkpoint_to_load} --noise-mode='random'"
+        gen_module = os.path.join(stylegan3_repo, 'gen_images.py')
+
+        comm = f"python {gen_module} --outdir={output_directory} --network={checkpoint_to_load} --noise-mode='random'"
 
         os.system(comm)
