@@ -403,16 +403,16 @@ class LatentGAN(GAN):
     def train_step(self, real_data):
         raise NotImplementedError
     
-    def save_generated_images(self, output_dir: str, sample_size: int, **args):
+    def save_generated_images(self, output_dir: str, sample_size: int, repetitions: int, **args):
+        
+        for repetition in range(0, repetitions):
+            samples = self.generate_samples(sample_size, **args)
 
-        samples = self.generate_samples(sample_size, **args)
+            if not os.path.isdir(output_dir):
+                os.makedirs(output_dir)
 
-        if not os.path.isdir(output_dir):
-            os.makedirs(output_dir)
-
-        for i, image in enumerate(tqdm(samples)):
-            save_image(image, output_dir + "/" + str(i) + ".png", normalize=True)
-
+            for i, image in enumerate(tqdm(samples)):
+                save_image(image, output_dir + "/" + str(repetition) + "_" + str(i) + ".png", normalize=True)
 
 
 class ABGAN(GAN):
