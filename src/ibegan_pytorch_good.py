@@ -1,9 +1,12 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import optim
 
-from src.began_pytorch_good import INFOGAN
+from src.abstract_gan import LatentGAN
+from src.began_pytorch_good import BEGAN
 from src.utils import device
+
 
 class Decoder(nn.Module):
     def __init__(self, latent_dimension, num_filters):
@@ -14,30 +17,52 @@ class Decoder(nn.Module):
         self._init_modules()
 
     def _init_modules(self):
-        self.elu = nn.ELU(inplace=True)
-        self.tanh = nn.Tanh()
-        self.up = nn.UpsamplingNearest2d(scale_factor=2)
+        self.h0_block = nn.Sequential(
+            nn.Linear(self.h, self.num_filters * 8 * 8),
 
-        self.h0 = nn.Linear(self.h, self.num_filters * 8 * 8)
-        self.batchnorm0 = nn.BatchNorm2d(self.num_filters)
+            nn.BatchNorm1d(self.num_filters * 8 * 8),
+        )
 
-        self.conv0 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.conv1 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.batchnorm1 = nn.BatchNorm2d(self.num_filters)
+        self.conv_block1 = nn.Sequential(
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
 
-        self.conv2 = nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1)
-        self.conv3 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.batchnorm2 = nn.BatchNorm2d(self.num_filters)
+            nn.BatchNorm2d(self.num_filters)
+        )
 
-        self.conv4 = nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1)
-        self.conv5 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.batchnorm3 = nn.BatchNorm2d(self.num_filters)
+        self.conv_block2 = nn.Sequential(
+            nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
 
-        self.conv6 = nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1)
-        self.conv7 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.batchnorm4 = nn.BatchNorm2d(self.num_filters)
+            nn.BatchNorm2d(self.num_filters)
+        )
 
-        self.conv8 = nn.Conv2d(self.num_filters, 3, 3, 1, 1)
+        self.conv_block3 = nn.Sequential(
+            nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+
+            nn.BatchNorm2d(self.num_filters)
+        )
+
+        self.conv_block4 = nn.Sequential(
+            nn.Conv2d(2 * self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+
+            nn.BatchNorm2d(self.num_filters)
+        )
+
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(self.num_filters, 3, 3, 1, 1),
+            nn.Tanh()
+        )
 
     def weights_init(self):
         for m in self._modules:
@@ -50,46 +75,34 @@ class Decoder(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, input):
-        h0 = self.h0(input)
+        h0 = self.h0_block(input)
 
         # reshape
-        # -1 means to infer batch size from input passed
-        h0 = h0.view((input.shape[0], self.num_filters, 8, 8))
-        h0 = self.batchnorm0(h0)
+        h0 = h0.view(input.shape[0], self.num_filters, 8, 8)
 
-        x = self.elu(self.conv0(h0))
-        x = self.elu(self.conv1(x))
-        x = self.batchnorm1(x)
-        x = self.up(x)
+        # CONV1
+        x = self.conv_block1(h0)
 
-        # upsample and inject h0
-        upsampled_h = self.up(h0)
+        x = torch.cat([x, h0], dim=1)
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
+
+        # CONV2
+        x = self.conv_block2(x)
+
+        upsampled_h = F.interpolate(h0, scale_factor=2, mode='nearest')
         x = torch.cat([x, upsampled_h], dim=1)
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
 
-        x = self.elu(self.conv2(x))
-        x = self.elu(self.conv3(x))
-        x = self.batchnorm2(x)
-        x = self.up(x)
+        # CONV3
+        x = self.conv_block3(x)
 
-        # upsample and inject h0
-        upsampled_h = self.up(upsampled_h)
+        upsampled_h = F.interpolate(upsampled_h, scale_factor=2, mode='nearest')
         x = torch.cat([x, upsampled_h], dim=1)
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
 
-        x = self.elu(self.conv4(x))
-        x = self.elu(self.conv5(x))
-        x = self.batchnorm3(x)
-        x = self.up(x)
+        x = self.conv_block4(x)
+        x = self.final_conv(x)
 
-        # upsample and inject h0
-        upsampled_h = self.up(upsampled_h)
-        x = torch.cat([x, upsampled_h], dim=1)
-
-        x = self.elu(self.conv6(x))
-        x = self.elu(self.conv7(x))
-        x = self.batchnorm4(x)
-
-        x = self.elu(self.conv8(x))
-        x = self.tanh(x)
         return x
 
 
@@ -102,31 +115,42 @@ class Encoder(nn.Module):
         self._init_modules()
 
     def _init_modules(self):
-        self.elu = nn.ELU(inplace=True)
 
         # last conv of each layer will take care of subsampling with stride=2
 
-        self.conv0 = nn.Conv2d(3, self.num_filters, 3, 1, 1)
-        self.batchnorm0 = nn.BatchNorm2d(self.num_filters)
+        self.main = nn.Sequential(
+            nn.Conv2d(3, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.BatchNorm2d(self.num_filters),
 
-        self.conv1 = nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1)
-        self.conv2 = nn.Conv2d(self.num_filters, 2 * self.num_filters, 3, 2, 1)
-        self.batchnorm1 = nn.BatchNorm2d(2 * self.num_filters)
+            nn.Conv2d(self.num_filters, self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(self.num_filters, 2 * self.num_filters, 3, 2, 1),
+            nn.ELU(inplace=True),
+            nn.BatchNorm2d(2 * self.num_filters),
 
-        self.conv3 = nn.Conv2d(2 * self.num_filters, 2 * self.num_filters, 3, 1, 1)
-        self.conv4 = nn.Conv2d(2 * self.num_filters, 3 * self.num_filters, 3, 2, 1)
-        self.batchnorm2 = nn.BatchNorm2d(3 * self.num_filters)
+            nn.Conv2d(2 * self.num_filters, 2 * self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(2 * self.num_filters, 3 * self.num_filters, 3, 2, 1),
+            nn.ELU(inplace=True),
+            nn.BatchNorm2d(3 * self.num_filters),
 
-        self.conv5 = nn.Conv2d(3 * self.num_filters, 3 * self.num_filters, 3, 1, 1)
-        self.conv6 = nn.Conv2d(3 * self.num_filters, 4 * self.num_filters, 3, 2, 1)
-        self.batchnorm3 = nn.BatchNorm2d(4 * self.num_filters)
+            nn.Conv2d(3 * self.num_filters, 3 * self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(3 * self.num_filters, 4 * self.num_filters, 3, 2, 1),
+            nn.ELU(inplace=True),
+            nn.BatchNorm2d(4 * self.num_filters),
 
-        self.conv7 = nn.Conv2d(4 * self.num_filters, 4 * self.num_filters, 3, 1, 1)
-        self.conv8 = nn.Conv2d(4 * self.num_filters, 4 * self.num_filters, 3, 1, 1)
-        self.batchnorm4 = nn.BatchNorm2d(4 * self.num_filters)
+            nn.Conv2d(4 * self.num_filters, 4 * self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(4 * self.num_filters, 4 * self.num_filters, 3, 1, 1),
+            nn.ELU(inplace=True),
+            nn.BatchNorm2d(4 * self.num_filters)
+
+        )
 
         # output of encoder will be input of encoder which expects input of size 'h'
-        self.fc = nn.Linear(8 * 8 * 4 * self.num_filters, self.h)
+        self.fc = nn.Linear(4 * 8 * 8 * self.num_filters, self.h)
 
     def weights_init(self):
         for m in self._modules:
@@ -139,28 +163,10 @@ class Encoder(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, input):
-        x = self.elu(self.conv0(input))
-        x = self.batchnorm0(x)
-
-        x = self.elu(self.conv1(x))
-        x = self.elu(self.conv2(x))
-        x = self.batchnorm1(x)
-
-        x = self.elu(self.conv3(x))
-        x = self.elu(self.conv4(x))
-        x = self.batchnorm2(x)
-
-        x = self.elu(self.conv5(x))
-        x = self.elu(self.conv6(x))
-        x = self.batchnorm3(x)
-
-        x = self.elu(self.conv7(x))
-        x = self.elu(self.conv8(x))
-        x = self.batchnorm4(x)
+        x = self.main(input)
 
         # reshape
-        # -1 means to infer batch size from input passed
-        x = x.view((input.shape[0], 4 * self.num_filters * 8 * 8))
+        x = x.view(input.shape[0], 4 * self.num_filters * 8 * 8)
         x = self.fc(x)
 
         return x
@@ -197,10 +203,10 @@ class Discriminator(nn.Module):
         return out
 
 
-class IBEGAN(INFOGAN):
+class IBEGAN(BEGAN):
 
-    def __init__(self, latent_dim = 128, num_filters = 64, noise_fn = None,
-                 lr_d=0.0004, lr_g=0.0004, lr_scheduler_class = None):
+    def __init__(self, latent_dim=128, num_filters=64, noise_fn=None,
+                 lr_d=0.0004, lr_g=0.0004, lr_scheduler_class=None):
         """A very basic DCGAN class for generating MNIST digits
         Args:
             generator: a Ganerator network
@@ -212,6 +218,9 @@ class IBEGAN(INFOGAN):
             lr_d: learning rate for the discriminator
             lr_g: learning rate for the generator
         """
+        def noise(x): return torch.normal(mean=0, std=1, size=(x, latent_dim), device=device)
+
+        noise_fn = noise if noise_fn is None else noise_fn
 
         lr_scheduler_class = optim.lr_scheduler.ReduceLROnPlateau if lr_scheduler_class is None else lr_scheduler_class
         generator = Generator(latent_dim, num_filters).to(device)
@@ -222,28 +231,33 @@ class IBEGAN(INFOGAN):
         optim_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
         optim_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
 
-        super().__init__(latent_dim,
-                         generator=generator,
-                         discriminator=discriminator,
-                         optim_g=optim_g,
-                         optim_d=optim_d,
-                         noise_fn=noise_fn,
-                         lr_scheduler_class=lr_scheduler_class)
+        BEGAN.__init__(self, latent_dim, num_filters, noise_fn, lr_d, lr_g, lr_scheduler_class)
+
+        # overwrite began attributes with ibegan attributes
+        LatentGAN.__init__(self,
+                           latent_dim,
+                           generator=generator,
+                           discriminator=discriminator,
+                           optim_g=optim_g,
+                           optim_d=optim_d,
+                           noise_fn=noise_fn,
+                           lr_scheduler_class=lr_scheduler_class)
 
         self.criterion_noisy = nn.MSELoss()
         self.lambda_noise = 2
 
     def train_step_discriminator(self, real_samples, current_batch_size):
         """Train the discriminator one step and return the losses."""
+        self.optim_d.zero_grad()
+
         pred_real = self.discriminator(real_samples)
         loss_real = self.criterion(pred_real, real_samples)  # l1_loss
 
         # generated samples
         latent_vec = self.noise_fn(current_batch_size)
-        with torch.no_grad():
-            fake_samples = self.generator(latent_vec)
-        pred_fake = self.discriminator(fake_samples)
-        loss_fake = self.criterion(pred_fake, fake_samples)  # l1_loss
+        fake_samples = self.generator(latent_vec)
+        pred_fake = self.discriminator(fake_samples.detach())
+        loss_fake = self.criterion(pred_fake, fake_samples.detach())  # l1_loss
 
         # denoising loss
         noise = torch.randn_like(real_samples)
@@ -261,11 +275,10 @@ class IBEGAN(INFOGAN):
         # combine losses
         loss = loss_real - self.Kt * loss_fake + self.lambda_noise * loss_noisy
 
-        self.optim_d.zero_grad()
         loss.backward()
         self.optim_d.step()
 
-        return loss, loss_real, loss_fake
+        return loss, loss_real, loss_fake, fake_samples
 
 
 if __name__ == '__main__':
@@ -274,5 +287,11 @@ if __name__ == '__main__':
     https://wlouyang.github.io/Papers/iBegan.pdf
     """
 
-    gan = IBEGAN()
-    gan.train_with_default_dataset(16, 64, 10)
+    gan = IBEGAN(latent_dim=128, num_filters=64, lr_d=0.0001, lr_g=0.0001)
+    gan.train_with_default_dataset(batch_size=16,
+                                   image_size=64,
+                                   epochs=3,
+                                   save_imgs_local=True,
+                                   wandb_plot=True,
+                                   save_model_checkpoints=True,
+                                   scheduler_params={'factor': 0.2})
