@@ -185,11 +185,8 @@ class TestEvaluate:
             for (fake, _) in tqdm(fake_data, desc="Loading generated images"):
                 fake_images.append(fake)
         else:
-            for i, (fake, _) in enumerate(tqdm(fake_data, desc="Loading generated images")):
-                if i < cut:
-                    fake_images.append(fake)
-                else:
-                    break
+            for (fake, _) in tqdm(fake_data[:cut], desc="Loading generated images"):
+                fake_images.append(fake)
         self.fake_images = torch.stack(fake_images)
 
         self.real_images = None
@@ -203,11 +200,8 @@ class TestEvaluate:
                 for (real, _) in tqdm(real_data, desc="Loading real images"):
                     real_images.append(real)
             else:
-                for i, (real, _) in enumerate(tqdm(real_data, desc="Loading real images")):
-                    if i < cut:
-                        real_images.append(real)
-                    else:
-                        break
+                for (real, _) in tqdm(real_data[:cut], desc="Loading real images"):
+                    real_images.append(real)
             self.real_images = torch.stack(real_images)
 
     def perform(self, metrics: List[GANMetric], wandb_plot: bool = False, run_name: str = "test_run"):
