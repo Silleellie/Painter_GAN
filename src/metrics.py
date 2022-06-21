@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from typing import List
+
 import numpy as np
 import torch
 
@@ -12,6 +14,12 @@ from torch.nn.functional import cosine_similarity
 
 # implementation of the MiFid metric based on the original implementation of the fid metric in the torchmetrics library
 # it expands the Fid implementation by adding the computations associated to the MiFid metric
+from torchvision.transforms import transforms
+from tqdm import tqdm
+
+from src.utils import ClasslessImageFolder, device
+
+
 class MiFID(Metric):
     def __init__(self, feature=2048, epsilon=1e-6, **args):
         super().__init__(**args)
@@ -159,3 +167,46 @@ class ISMetric(GANMetricFake):
     
     def __str__(self) -> str:
         return "Inception Score (IS)"
+
+
+class TestEvaluate:
+
+    def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64):
+
+        transf = transforms.Compose([transforms.Resize((64, 64)),
+                                          transforms.PILToTensor()])
+
+        fake_data = ClasslessImageFolder(path_fake, transform=transf)
+        fake_images = []
+        for (fake, _) in tqdm(fake_data, desc="Loading generated images"):
+            fake_images.append(fake)
+        self.fake_images = torch.stack(fake_images)
+
+        self.real_images = None
+        if path_real is not None:
+
+            real_data = ClasslessImageFolder(path_real, transform=transf)
+
+            real_images = []
+            for (real, _) in tqdm(real_data, desc="Loading real images"):
+                real_images.append(real)
+            self.real_images = torch.stack(real_images)
+
+    def perform(self, metrics: List[GANMetric]):
+        if any(isinstance(metric, GANMetricRealFake) for metric in metrics) and self.real_images is None:
+            raise ValueError("You must pass also the path of the fake images!")
+
+        for metric in metrics:
+            print("COMPUTING METRIC: ", str(metric))
+            if isinstance(metric, GANMetricFake):
+                metric.update(self.fake_images)
+            elif isinstance(metric, GANMetricRealFake):
+                metric.update(self.real_images, real=True)
+                metric.update(self.fake_images, real=False)
+
+        results = {}
+        for metric in metrics:
+            results[str(metric)] = metric.compute()
+            metric.reset()
+
+        return results
