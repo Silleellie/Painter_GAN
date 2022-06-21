@@ -691,12 +691,13 @@ class ABGAN(GAN):
         print("LOADING REAL DATA")
         for (real, _) in tqdm(real_data):
             real_images.append(real)
-        real_images = torch.stack(real_images)
+        real_images = torch.stack(real_images[:100])
 
         test_images = []
         print("LOADING FAKE DATA")
         for (test, _) in tqdm(test_data):
             test_images.extend(self.generate_images_b2a(test.to(device)))
+        test_images = list(map(lambda x: (x/2 + 0.5) * 255, test_images))[:100]
         test_images = torch.stack(test_images)
 
         for metric in metrics_to_consider:

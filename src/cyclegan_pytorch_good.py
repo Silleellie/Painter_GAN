@@ -9,6 +9,7 @@ from src.abstract_gan import ABGAN
 from src.metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
 from src.utils import device, ClasslessImageFolder
 
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_features):
         super(ResidualBlock, self).__init__()
@@ -26,6 +27,7 @@ class ResidualBlock(nn.Module):
     def forward(self, x):
         return x + self.block(x)
 
+
 class Generator(nn.Module):
     def __init__(self, channels_img, features_gen, num_res_blocks):
         super().__init__()
@@ -34,40 +36,42 @@ class Generator(nn.Module):
                   nn.Conv2d(channels_img, features_gen, 7, 1, 0),
                   nn.InstanceNorm2d(features_gen),
                   nn.ReLU(inplace=True)]
-        
-        layers.extend(self._default_block_downsample(features_gen, features_gen*2))
-        layers.extend(self._default_block_downsample(features_gen*2, features_gen*4))
+
+        layers.extend(self._default_block_downsample(features_gen, features_gen * 2))
+        layers.extend(self._default_block_downsample(features_gen * 2, features_gen * 4))
 
         for _ in range(num_res_blocks):
-            layers.append(ResidualBlock(features_gen*4))
-        
-        layers.extend(self._default_block_upsample(features_gen*4, features_gen*2))
-        layers.extend(self._default_block_upsample(features_gen*2, features_gen))
+            layers.append(ResidualBlock(features_gen * 4))
+
+        layers.extend(self._default_block_upsample(features_gen * 4, features_gen * 2))
+        layers.extend(self._default_block_upsample(features_gen * 2, features_gen))
 
         layers.extend([nn.ReflectionPad2d(channels_img),
                        nn.Conv2d(features_gen, channels_img, 7, 1, 0),
                        nn.Tanh()])
-        
+
         self.model = nn.Sequential(*layers)
 
     @staticmethod
-    def _default_block_upsample(in_channels, out_channels, kernel_size = 3, stride = 2, padding = 1, output_padding=1):
+    def _default_block_upsample(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1):
         return [
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding, bias=False),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding,
+                               bias=False),
             nn.InstanceNorm2d(out_channels),
             nn.ReLU(True)
         ]
 
     @staticmethod
-    def _default_block_downsample(in_channels, out_channels, kernel_size = 3, stride = 2, padding = 1):
+    def _default_block_downsample(in_channels, out_channels, kernel_size=3, stride=2, padding=1):
         return [
-                nn.Conv2d(in_channels, out_channels, kernel_size = kernel_size, stride = stride, padding = padding),
-                nn.InstanceNorm2d(out_channels),
-                nn.ReLU(inplace=True)
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+            nn.InstanceNorm2d(out_channels),
+            nn.ReLU(inplace=True)
         ]
 
     def forward(self, x):
         return self.model(x)
+
 
 class Discriminator(nn.Module):
     def __init__(self, in_channels, features_d):
@@ -92,11 +96,12 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.body(x)
 
+
 class CYCLEGAN(ABGAN):
-    def __init__(self, init_features: int = 64, 
+    def __init__(self, init_features: int = 64,
                  lr_generator=2e-4, lr_discriminator=2e-4,
                  lambda_cycle=10.0, lambda_identity=5.0, num_res_blocks=6,
-                 adversarial_criterion = nn.MSELoss(), cycle_criterion = nn.L1Loss(), identity_criterion = nn.L1Loss(),
+                 adversarial_criterion=nn.MSELoss(), cycle_criterion=nn.L1Loss(), identity_criterion=nn.L1Loss(),
                  lr_scheduler_class: torch.optim.lr_scheduler = torch.optim.lr_scheduler.LambdaLR):
         """
         suggested number of residual blocks equal to 6 for 128x128 images and equal to 9 for 256x256 or better quality images
@@ -121,8 +126,8 @@ class CYCLEGAN(ABGAN):
         # in the CycleGan paper, in the task of converting Monet's paintings to photos, the value
         # for the cycle lambda was set to 10 while the suggested value for the lambda identity 
         # is equal to half the value of the cycle lambda (therefore in this case equal to 5)
-        self.lambda_cycle = lambda_cycle # multiplied to the cycle loss
-        self.lambda_identity = lambda_identity # multiplied to the identity loss
+        self.lambda_cycle = lambda_cycle  # multiplied to the cycle loss
+        self.lambda_identity = lambda_identity  # multiplied to the identity loss
 
         # generator tries to minimize the loss while discriminator tries to maximize it
         self.adversarial_criterion = adversarial_criterion
@@ -142,22 +147,22 @@ class CYCLEGAN(ABGAN):
         self.optim_g.zero_grad()
 
         ### GENERATOR TRAINING ###
-    
+
         fake_B = self.generator_a2b(real_data_a)
         fake_A = self.generator_b2a(real_data_b)
-        
+
         # identity loss
         loss_id_A = self.identity_criterion(fake_B, real_data_a)
         loss_id_B = self.identity_criterion(fake_A, real_data_b)
         loss_identity = loss_id_A + loss_id_B
-        
+
         # adversarial loss
         pred_AB = self.discriminator_b(fake_B)
         pred_BA = self.discriminator_a(fake_A)
-        loss_GAN_AB = self.adversarial_criterion(pred_AB, torch.ones_like(pred_AB)) 
+        loss_GAN_AB = self.adversarial_criterion(pred_AB, torch.ones_like(pred_AB))
         loss_GAN_BA = self.adversarial_criterion(pred_BA, torch.ones_like(pred_BA))
         loss_GAN = loss_GAN_AB + loss_GAN_BA
-        
+
         # cycle loss
         recov_A = self.generator_b2a(fake_B)
         recov_B = self.generator_a2b(fake_A)
@@ -166,30 +171,30 @@ class CYCLEGAN(ABGAN):
         loss_cycle = loss_cycle_A + loss_cycle_B
 
         loss_G = self.lambda_identity * loss_identity + loss_GAN + self.lambda_cycle * loss_cycle
-        
+
         loss_G.backward()
         self.optim_g.step()
 
         self.optim_d.zero_grad()
-        
+
         # DISCRIMINATOR A TRAINING
-        
+
         pred_a = self.discriminator_a(real_data_a)
         pred_a_fake = self.discriminator_a(fake_A.detach())
         loss_real = self.adversarial_criterion(pred_a, torch.ones_like(pred_a))
         loss_fake = self.adversarial_criterion(pred_a_fake, torch.zeros_like(pred_a_fake))
         # divided by 2 as suggested in the CycleGan paper
         loss_D_A = (loss_real + loss_fake) / 2
-        
+
         # DISCRIMINATOR B TRAINING
-        
+
         pred_b = self.discriminator_b(real_data_b)
         pred_b_fake = self.discriminator_b(fake_B.detach())
         loss_real = self.adversarial_criterion(pred_b, torch.ones_like(pred_b))
         loss_fake = self.adversarial_criterion(pred_b_fake, torch.zeros_like(pred_b_fake))
         # divided by 2 as suggested in the CycleGan paper
         loss_D_B = (loss_real + loss_fake) / 2
-        
+
         loss_D = loss_D_A + loss_D_B
         loss_D.backward()
         self.optim_d.step()
@@ -198,6 +203,7 @@ class CYCLEGAN(ABGAN):
         loss_d = loss_D_A.item() + loss_D_B.item()
 
         return {"G_loss": loss_g, "D_loss": loss_d}
+
 
 if __name__ == '__main__':
     """
@@ -211,18 +217,24 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     import torchvision.transforms as transforms
 
-    def lr_decay_func(epoch): return 1 - max(0, epoch-decay_epoch)/(epochs-decay_epoch)
 
-    transf = transforms.Compose([transforms.Resize((64, 64)),
-                                 transforms.ToTensor()])
-    
+    def lr_decay_func(epoch): return 1 - max(0, epoch - decay_epoch) / (epochs - decay_epoch)
+
+
+    transf_real = transforms.Compose([transforms.Resize((64, 64)),
+                                      transforms.PILToTensor()])
+
+    transf_test = transforms.Compose([transforms.Resize((64, 64)),
+                                      transforms.ToTensor(),
+                                      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
     gan = CYCLEGAN()
     # gan.train(1, 128, epochs, scheduler_params={'lr_lambda': lr_decay_func}, wandb_plot=False, save_model_checkpoints=True)
 
-    gan.load_model('../../../cycle/200', for_inference=True)
+    gan.load_model('200', for_inference=True)
 
-    real_data = ClasslessImageFolder('../../../monet_jpg', transform=transf)
-    test_data = ClasslessImageFolder('../../../photo_jpg', transform=transf)
+    real_data = ClasslessImageFolder('../dataset/monet_jpg', transform=transf_real)
+    test_data = ClasslessImageFolder('../dataset/photo_jpg', transform=transf_test)
 
     test_data = DataLoader(test_data, batch_size=64, shuffle=True, num_workers=0)
-    print(gan.test(real_data, test_data, metrics_to_consider=[ISMetric(), FIDMetric(), MIFIDMetric()]))
+    print(gan.test(real_data, test_data, metrics_to_consider=[KIDMetric(subset_size=50)]))
