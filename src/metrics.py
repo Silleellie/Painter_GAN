@@ -173,8 +173,8 @@ class TestEvaluate:
 
     def __init__(self, path_fake: str, path_real: str = None, image_size: int = 64):
 
-        transf = transforms.Compose([transforms.Resize((64, 64)),
-                                          transforms.PILToTensor()])
+        transf = transforms.Compose([transforms.Resize((image_size, image_size)),
+                                     transforms.PILToTensor()])
 
         fake_data = ClasslessImageFolder(path_fake, transform=transf)
         fake_images = []
