@@ -34,6 +34,7 @@ class StyleGAN3:
 
         gen_module = os.path.join(stylegan3_repo, 'gen_images.py')
 
-        comm = f"python {gen_module} --outdir={output_directory} --network={checkpoint_to_load} --noise-mode='random'"
+        comm = f"python {gen_module} --outdir={output_directory} --network={checkpoint_to_load} --noise-mode='random' " \
+               f"--seeds=69-420"
 
         os.system(comm)
