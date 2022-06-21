@@ -180,8 +180,16 @@ class TestEvaluate:
 
         fake_data = ClasslessImageFolder(path_fake, transform=transf)
         fake_images = []
-        for (fake, _) in tqdm(fake_data, desc="Loading generated images"):
-            fake_images.append(fake)
+
+        if cut is None:
+            for (fake, _) in tqdm(fake_data, desc="Loading generated images"):
+                fake_images.append(fake)
+        else:
+            for i, (fake, _) in enumerate(tqdm(fake_data, desc="Loading generated images")):
+                if i < cut:
+                    fake_images.append(fake)
+                else:
+                    break
         self.fake_images = torch.stack(fake_images)
 
         self.real_images = None
@@ -190,13 +198,17 @@ class TestEvaluate:
             real_data = ClasslessImageFolder(path_real, transform=transf)
 
             real_images = []
-            for (real, _) in tqdm(real_data, desc="Loading real images"):
-                real_images.append(real)
+
+            if cut is None:
+                for (real, _) in tqdm(real_data, desc="Loading real images"):
+                    real_images.append(real)
+            else:
+                for i, (real, _) in enumerate(tqdm(real_data, desc="Loading real images")):
+                    if i < cut:
+                        real_images.append(real)
+                    else:
+                        break
             self.real_images = torch.stack(real_images)
-        
-        if cut is not None:
-            self.fake_images = self.fake_images[:cut]
-            self.real_images = self.real_images[:cut]
 
     def perform(self, metrics: List[GANMetric], wandb_plot: bool = False, run_name: str = "test_run"):
         if any(isinstance(metric, GANMetricRealFake) for metric in metrics) and self.real_images is None:
