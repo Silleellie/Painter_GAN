@@ -241,7 +241,7 @@ if __name__ == '__main__':
     G_loss -> 1.9053003065129543, D_loss_real -> 0.23552483283577763, D_loss_fake -> 0.3951658665182743
     """
 
-    gan = DCGAN()
+    gan = DCGAN(latent_dim=100)
     gan.train_with_default_dataset(batch_size=128,
                                    image_size=64,
                                    epochs=5,
