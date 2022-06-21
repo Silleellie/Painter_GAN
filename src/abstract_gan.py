@@ -406,6 +406,11 @@ class LatentGAN(GAN):
     def save_generated_images(self, output_dir: str, sample_size: int, repetitions: int, **args):
         
         for repetition in range(0, repetitions):
+
+            torch.manual_seed(repetition)
+            random.seed(repetition)
+            np.random.seed(repetition)
+
             samples = self.generate_samples(sample_size, **args)
 
             if not os.path.isdir(output_dir):
