@@ -3,17 +3,25 @@ import re
 import shutil
 from pathlib import Path
 from copy import deepcopy
+import random
 from typing import Tuple, List, Dict, Callable, Optional
+
+import pandas as pd
 import torch
 from PIL import Image
+from torch.utils.data.dataset import ConcatDataset
 
 from torchvision.datasets import ImageFolder
 from torch.utils.data import Dataset
 
 device = torch.device("cuda:0" if (torch.cuda.is_available()) else "cpu")
 
-def set_device(device: str):
-    device = device
+
+def set_device(device_new: str):
+    global device
+
+    device = device_new
+
 
 def clean_dataset(resized_images_dir):
     for filename in os.listdir(resized_images_dir):

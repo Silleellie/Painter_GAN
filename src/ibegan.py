@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import optim
 
 from src.abstract_gan import LatentGAN
-from src.began_pytorch_good import BEGAN
+from src.began import BEGAN
 from src.utils import device
 
 
@@ -286,12 +286,11 @@ if __name__ == '__main__':
     IMPROVED BEGAN PAPER
     https://wlouyang.github.io/Papers/iBegan.pdf
     """
-
     gan = IBEGAN(latent_dim=128, num_filters=64, lr_d=0.0001, lr_g=0.0001)
     gan.train_with_default_dataset(batch_size=16,
                                    image_size=64,
-                                   epochs=3,
+                                   epochs=5,
                                    save_imgs_local=True,
-                                   wandb_plot=True,
+                                   wandb_plot=False,
                                    save_model_checkpoints=True,
                                    scheduler_params={'factor': 0.2})

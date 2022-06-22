@@ -1,10 +1,13 @@
-from pytorch_fid.fid_score import get_activations, InceptionV3, IMAGE_EXTENSIONS, calculate_frechet_distance
+import wandb
+from pytorch_fid.fid_score import get_activations, InceptionV3, IMAGE_EXTENSIONS, calculate_frechet_distance, \
+    calculate_fid_given_paths
 from scipy.spatial.distance import cosine
 
 import os
 import numpy as np
 import pathlib
 from tqdm import tqdm
+
 
 def calculate_mifid_given_paths(path_fake, path_real, batch_size, device, dims, num_workers=1, epsilon=1e-6):
     """Calculates the FID of two paths"""
@@ -57,3 +60,31 @@ def calculate_mifid_given_paths(path_fake, path_real, batch_size, device, dims, 
     mifid = fid_value * (1 / d)
 
     return mifid
+
+
+def plot_fid_mifid(path_fake: str, path_real: str, run_name: str = None):
+    print("Calculating Fid Score...")
+
+    fid = calculate_fid_given_paths([path_fake, path_real], batch_size=50, device='cuda:0', dims=2048)
+    print("fid: ", fid)
+
+    print("Calculating MiFid Score...")
+
+    mifid = calculate_mifid_given_paths(path_fake=path_fake, path_real=path_real,
+                                        batch_size=50,
+                                        device='cuda:0',
+                                        dims=2048,
+                                        epsilon=10e-15)
+    print("mifid: ", mifid)
+
+    if run_name is not None:
+        run = wandb.init(project='Painter GAN', entity='painter_gan', name=run_name)
+
+        wandb.define_metric('FID')
+        wandb.define_metric('MiFID')
+
+        res_plot = {'FID': fid, 'MiFID': mifid}
+
+        wandb.log(res_plot)
+
+        run.finish()

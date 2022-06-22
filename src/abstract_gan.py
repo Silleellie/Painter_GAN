@@ -74,8 +74,8 @@ class GAN(ABC):
     @classmethod
     def prepare_dataset(cls, image_size: int, normalization_values=((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))):
 
-        dataset_path = '../dataset/best_artworks/resized/resized'
-        metadata_path = '../dataset/best_artworks/artists.csv'
+        dataset_path = 'dataset/best_artworks/resized/resized'
+        metadata_path = 'dataset/best_artworks/artists.csv'
         metadata_csv = pd.read_csv(metadata_path)
 
         death_monet = 1926

@@ -301,8 +301,8 @@ if __name__ == '__main__':
     gan = BEGAN(latent_dim=64, lr_g=0.0001, lr_d=0.0001)
     gan.train_with_default_dataset(batch_size=16,
                                    image_size=64,
-                                   epochs=3,
+                                   epochs=5,
                                    save_imgs_local=True,
-                                   wandb_plot=True,
+                                   wandb_plot=False,
                                    save_model_checkpoints=True,
                                    scheduler_params={'factor': 0.2})

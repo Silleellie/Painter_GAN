@@ -245,6 +245,6 @@ if __name__ == '__main__':
     gan.train_with_default_dataset(batch_size=128,
                                    image_size=64,
                                    epochs=5,
-                                   save_model_checkpoints=False,
+                                   save_model_checkpoints=True,
                                    save_imgs_local=True,
                                    wandb_plot=False)
