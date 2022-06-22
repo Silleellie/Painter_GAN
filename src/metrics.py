@@ -236,7 +236,8 @@ class TestEvaluate:
                     first_values.append(value1)
                     second_values.append(value2)
                 
-                results[str(metric)] = (np.average(first_values), np.average(second_values))
+                results[str(metric) + "_1"] = np.average(first_values)
+                results[str(metric) + "_2"] = np.average(second_values)
 
             else:
                 results[str(metric)] = np.average(metrics_for_batches[str(metric)])
