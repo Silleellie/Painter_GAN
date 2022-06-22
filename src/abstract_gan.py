@@ -586,7 +586,7 @@ class ABGAN(GAN):
 
             test_set_list = []
             for i, (image, _) in enumerate(test_set):
-                if i < batch_size:
+                if i < 64:
                     test_set_list.append(image.to(device))
                 else:
                     break
