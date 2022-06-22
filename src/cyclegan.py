@@ -6,7 +6,6 @@ import itertools
 from torchvision.datasets import ImageFolder
 
 from src.abstract_gan import ABGAN
-from src.metrics import MIFIDMetric, ISMetric, KIDMetric, FIDMetric
 from src.utils import device, ClasslessImageFolder
 
 
@@ -214,27 +213,8 @@ if __name__ == '__main__':
     decay_epoch = 100
     epochs = 200
 
-    from torch.utils.data import DataLoader
-    import torchvision.transforms as transforms
-
 
     def lr_decay_func(epoch): return 1 - max(0, epoch - decay_epoch) / (epochs - decay_epoch)
 
-
-    transf_real = transforms.Compose([transforms.Resize((64, 64)),
-                                      transforms.PILToTensor()])
-
-    transf_test = transforms.Compose([transforms.Resize((64, 64)),
-                                      transforms.ToTensor(),
-                                      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
     gan = CYCLEGAN()
-    # gan.train(1, 128, epochs, scheduler_params={'lr_lambda': lr_decay_func}, wandb_plot=False, save_model_checkpoints=True)
-
-    gan.load_model('200', for_inference=True)
-
-    real_data = ClasslessImageFolder('../dataset/monet_jpg', transform=transf_real)
-    test_data = ClasslessImageFolder('../dataset/photo_jpg', transform=transf_test)
-
-    test_data = DataLoader(test_data, batch_size=64, shuffle=True, num_workers=0)
-    print(gan.test(real_data, test_data, metrics_to_consider=[KIDMetric(subset_size=50)]))
+    gan.train(64, 64, epochs, scheduler_params={'lr_lambda': lr_decay_func}, wandb_plot=False, save_model_checkpoints=False)

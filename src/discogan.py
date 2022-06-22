@@ -153,5 +153,5 @@ class DISCOGAN(ABGAN):
 
 if __name__ == '__main__':
     gan = DISCOGAN()
-    gan.train_with_default_dataset(1, 128, 10, False, False)
+    gan.train_with_default_dataset(64, 64, 10, False, False)
             
