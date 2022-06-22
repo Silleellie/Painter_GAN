@@ -1,9 +1,10 @@
 from pytorch_fid.fid_score import get_activations, InceptionV3, IMAGE_EXTENSIONS, calculate_frechet_distance
-from torch.nn.functional import cosine_similarity
+from scipy.spatial.distance import cosine
 
 import os
 import numpy as np
 import pathlib
+from tqdm import tqdm
 
 def calculate_mifid_given_paths(path_fake, path_real, batch_size, device, dims, num_workers=1, epsilon=1e-6):
     """Calculates the FID of two paths"""
@@ -43,10 +44,10 @@ def calculate_mifid_given_paths(path_fake, path_real, batch_size, device, dims, 
 
     min_distances_vector = []
 
-    for fake_feature_vector in act_fake:
+    for fake_feature_vector in tqdm(act_fake):
         distances_vector = []
         for real_feature_vector in act_real:
-            cos_distance = 1 - cosine_similarity(real_feature_vector, fake_feature_vector, dim=0)
+            cos_distance = cosine(real_feature_vector, fake_feature_vector)
             distances_vector.append(cos_distance)
         min_distances_vector.append(min(distances_vector))
     
