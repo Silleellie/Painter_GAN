@@ -7,11 +7,13 @@ Various GANs architectures and strategies compared to tackle the [I'm something 
 All the source code for each GAN architecture is contained in the `src` folder.
 * Each file (one for every GAN architecture) contains a `main` method in which there's example on how to perform the train of the related gan
 
+**Please note**: The plots and images generated during training, as well as the results for the test phase can be found [here](https://wandb.ai/painter_gan/Painter%20GAN)
+
 # Usage
 
 ## Train with default augmented "best artworks" dataset
 
-In order to perform training of a specific GAN architecture with the augmented dataset strategy as described in the attached paper, download the following [kaggle dataset](https://www.kaggle.com/datasets/ikarus777/best-artworks-of-all-time) and unpack it in the `dataset/best_artworks` folder.
+In order to perform training of a specific GAN architecture with the augmented dataset strategy as described in the [attached paper](GANs_for_Monet_Paintings.pdf), download the following [kaggle dataset](https://www.kaggle.com/datasets/ikarus777/best-artworks-of-all-time) and unpack it in the `dataset/best_artworks` folder.
 
 Then simply instantiate the GAN and call the `train_with_default_dataset()` method.
 
